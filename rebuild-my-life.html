@@ -566,9 +566,16 @@ window.saveToFirestore = async function() {
 function startRealtimeSync(uid) {
   if (unsubscribeSnapshot) unsubscribeSnapshot();
   const docRef = doc(db, 'users', uid, 'data', 'appdata');
-  unsubscribeSnapshot = onSnapshot(docRef, (docSnap) => {
-    if (docSnap.exists() && docSnap.metadata.hasPendingWrites === false) {
+  let lastSyncTs = 0;
+  unsubscribeSnapshot = onSnapshot(docRef, { includeMetadataChanges: false }, (docSnap) => {
+    // Alleen verwerken als het van de server komt (niet onze eigen pending write)
+    if (docSnap.exists() && !docSnap.metadata.hasPendingWrites && !docSnap.metadata.fromCache) {
       const data = docSnap.data();
+      const serverTs = data.updatedAt || '';
+      // Sla over als we zelf recent geschreven hebben (binnen 3 seconden)
+      const now = Date.now();
+      if (now - lastLocalWrite < 3000) return;
+      lastSyncTs = now;
       const keys = ['boodItems','boodNextId','boodFreq','boodWinkels','budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId','voedingItems','voedingNextId'];
       keys.forEach(k => { if (data[k] !== undefined) window.S[k] = data[k]; });
       if (window._renderAll) window._renderAll();
@@ -580,6 +587,8 @@ function startRealtimeSync(uid) {
   });
 }
 
+let lastLocalWrite = 0;
+
 function setSyncStatus(status) {
   const dot = document.getElementById('sync-dot');
   const label = document.getElementById('sync-label');
@@ -590,6 +599,7 @@ function setSyncStatus(status) {
 
 // Debounced save — wacht 1.5s na laatste wijziging
 window.debouncedSave = function() {
+  lastLocalWrite = Date.now();
   if (window.save) window.save(); // localStorage direct
   clearTimeout(syncTimeout);
   syncTimeout = setTimeout(() => { window.saveToFirestore(); }, 1500);
@@ -1471,7 +1481,7 @@ async function loadAIQuote(forceNew = false) {
   const today_str = today();
   const cached = localStorage.getItem('rml_quote_cache');
 
-  // Use cached quote if same day and not forcing new
+  // Gebruik gecachte quote als het dezelfde dag is en niet geforceerd vernieuwd
   if (!forceNew && cached) {
     try {
       const c = JSON.parse(cached);
@@ -1482,13 +1492,13 @@ async function loadAIQuote(forceNew = false) {
     } catch(e) {}
   }
 
-  // Show loading state
+  // Laadstatus tonen
   document.getElementById('hero-text').innerHTML = '<span style="opacity:0.4;font-style:italic;font-size:15px;">Quote wordt gegenereerd...</span>';
   document.getElementById('hero-author').textContent = '';
   document.getElementById('hero-reflect-btn').style.display = 'none';
   document.getElementById('hero-reflection').style.display = 'none';
 
-  // Track which tones were recently used to ensure variety
+  // Toon variatie bijhouden
   let recentTones = [];
   try {
     const hist = JSON.parse(localStorage.getItem('rml_quote_history') || '[]');
@@ -1498,7 +1508,6 @@ async function loadAIQuote(forceNew = false) {
   const tones = ['filosofisch', 'scherp & direct', 'poëtisch', 'nuchter & krachtig', 'warm & menselijk', 'uitdagend', 'stilte & ruimte'];
   const available = tones.filter(t => !recentTones.includes(t));
   const tone = available[Math.floor(Math.random() * available.length)] || tones[Math.floor(Math.random() * tones.length)];
-
   const dayOfWeek = new Date().toLocaleDateString('nl-NL', { weekday: 'long' });
 
   const prompt = `Je genereert één dagelijkse quote voor Twan.
@@ -1506,40 +1515,29 @@ async function loadAIQuote(forceNew = false) {
 Context over Twan:
 - 42 jaar, man, Asset Manager in Amsterdam
 - Zijn ex-vrouw Jessica verhuist deze maand definitief — een emotioneel ingrijpend moment
-- Hij worstel met dubbele gevoelens: verdriet én de wil om sterker uit dit te komen
+- Hij worstelt met dubbele gevoelens: verdriet én de wil om sterker uit dit te komen
 - Hij heeft een dochter, Abigail
 - Hij sport intensief (BodyCombat 2+ jaar), leeft gezond, is geïnteresseerd in longevity
 - Hij is Vrijmetselaar — waardeert symboliek, reflectie en persoonlijke groei
 - Hij zoekt structuur, maar past die momenteel niet consequent toe
 - Zijn kernbehoefte: dag voor dag een betere versie van zichzelf worden
 
-Vandaag is het ${dayOfWeek}.
-Gewenste toon voor deze quote: ${tone}
+Vandaag is het ${dayOfWeek}. Gewenste toon: ${tone}
 
 Regels:
-- De quote mag van een bekende persoon zijn (filosoof, schrijver, atleet, denker) OF een originele zin van jou
+- De quote mag van een bekende persoon zijn OF een originele zin
 - Nooit zweverig, nooit cliché, nooit gratuit positief
-- Maximaal 2 zinnen
-- Mag scherp zijn, mag stil zijn, mag raken
+- Maximaal 2 zinnen, mag scherp zijn, mag raken
 - Geen hashtags, geen uitroeptekens, geen emoji
-- De quote moet verrassend zijn — iets wat Twan niet verwacht maar wel herkent
 
 Geef je antwoord in exact dit JSON formaat, niets anders:
-{
-  "quote": "de quote zelf",
-  "author": "naam of 'eigen' als het van jou is",
-  "reflection": "één zin die uitlegt waarom deze quote op dit moment voor Twan relevant is — intiem, niet generiek"
-}`;
+{"quote":"de quote zelf","author":"naam of leeg als eigen","reflection":"één zin waarom deze quote nu voor Twan relevant is"}`;
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetch('/.netlify/functions/ai-proxy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 300,
-        messages: [{ role: 'user', content: prompt }]
-      })
+      body: JSON.stringify({ prompt })
     });
 
     const data = await response.json();
@@ -1547,30 +1545,30 @@ Geef je antwoord in exact dit JSON formaat, niets anders:
     const clean = raw.replace(/```json|```/g, '').trim();
     const parsed = JSON.parse(clean);
 
-    // Cache today's quote
     localStorage.setItem('rml_quote_cache', JSON.stringify({
-      date: today_str, quote: parsed.quote, author: parsed.author,
-      tone, reflection: parsed.reflection
+      date: today_str, quote: parsed.quote, author: parsed.author || '',
+      tone, reflection: parsed.reflection || ''
     }));
 
-    // Save to history
     try {
       const hist = JSON.parse(localStorage.getItem('rml_quote_history') || '[]');
       hist.push({ date: today_str, tone, quote: parsed.quote });
       localStorage.setItem('rml_quote_history', JSON.stringify(hist.slice(-30)));
     } catch(e) {}
 
-    displayQuote(parsed.quote, parsed.author, tone, parsed.reflection);
+    displayQuote(parsed.quote, parsed.author || '', tone, parsed.reflection || '');
 
   } catch(err) {
-    // Graceful fallback
+    // Fallback bij geen verbinding
     const fallbacks = [
-      { quote: "Je hoeft niet te weten hoe het afloopt. Je hoeft alleen maar de volgende stap te zetten.", author: "eigen", reflection: "Één dag tegelijk is genoeg." },
+      { quote: "Je hoeft niet te weten hoe het afloopt. Je hoeft alleen maar de volgende stap te zetten.", author: "", reflection: "Één dag tegelijk is genoeg." },
       { quote: "Het is niet de last die je breekt, maar de manier waarop je hem draagt.", author: "Lou Holtz", reflection: "Jij kiest hoe je dit draagt." },
-      { quote: "Moed is niet de afwezigheid van angst. Het is de beslissing dat iets anders belangrijker is.", author: "Ambrose Redmoon", reflection: "Jij beweegt, ook als het moeilijk is." },
+      { quote: "Vooruitgang, niet perfectie.", author: "", reflection: "Eén kleine stap vandaag is meer waard dan tien perfecte plannen." },
+      { quote: "Structuur geeft vrijheid. Chaos put uit.", author: "", reflection: "Elke routine die je bouwt is een fundament." },
+      { quote: "Jij bent niet wie je was. Je bent wie je kiest te zijn vandaag.", author: "", reflection: "Identiteit is een keuze, geen erfenis." },
     ];
     const fb = fallbacks[Math.floor(Math.random() * fallbacks.length)];
-    displayQuote(fb.quote, fb.author, 'krachtig', fb.reflection);
+    displayQuote(fb.quote, fb.author, tone, fb.reflection);
   }
 }
 
@@ -2367,33 +2365,23 @@ async function addVoedingItem() {
   btn.disabled = true;
   loading.style.display = 'flex';
 
-  const prompt = `Analyseer dit voedingsitem voor een gezondheids-app. Geef een eerlijke beoordeling zonder details over grammen of calorieën — focus op het grote plaatje.
+  const prompt = `Analyseer dit voedingsitem voor een gezondheids-app. Focus op het grote plaatje, geen grammen of calorieën.
 
 Item: "${name}"
 Portie: ${S.voedingPortie}
 
 Geef je antwoord in exact dit JSON formaat, niets anders:
-{
-  "naam": "correcte naam van het product",
-  "score": 7,
-  "groep": "groenten|granen|eiwitten|zuivel|vetten|snacks|dranken",
-  "omschrijving": "één korte zin (max 8 woorden) over dit product",
-  "tip": "één praktische tip of opmerking (optioneel, mag leeg string zijn)"
-}
+{"naam":"correcte naam","score":7,"groep":"groenten|granen|eiwitten|zuivel|vetten|snacks|dranken","omschrijving":"één zin max 8 woorden","tip":"één korte tip of lege string"}
 
-Score 1-10: 1=zeer ongezond (bijv. frisdrank, chips), 5=neutraal, 10=zeer gezond (bijv. groenten, fruit).
-Wees eerlijk maar niet streng — context telt. Een cola is een 2, kipfilet is een 8, Big Mac is een 3.`;
+Score 1-10: 1=zeer ongezond, 10=zeer gezond. Cola=2, kipfilet=8, Big Mac=3, groenten=9.`;
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetch('/.netlify/functions/ai-proxy', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 200,
-        messages: [{ role: 'user', content: prompt }]
-      })
+      body: JSON.stringify({ prompt })
     });
+
     const data = await response.json();
     const raw = data.content?.[0]?.text || '';
     const clean = raw.replace(/```json|```/g, '').trim();
@@ -2413,14 +2401,15 @@ Wees eerlijk maar niet streng — context telt. Een cola is een 2, kipfilet is e
     });
 
   } catch(e) {
-    // Fallback zonder AI
+    // Fallback: lokale analyse
+    const result = analyseVoeding(name, S.voedingPortie);
     S.voedingItems.unshift({
       id: S.voedingNextId++,
-      naam: name,
-      score: 5,
-      groep: 'snacks',
-      omschrijving: 'Handmatig toegevoegd',
-      tip: '',
+      naam: result.naam,
+      score: result.score,
+      groep: result.groep,
+      omschrijving: result.omschrijving,
+      tip: result.tip,
       portie: S.voedingPortie,
       moment: S.voedingMoment,
       datum: today(),
@@ -2434,6 +2423,79 @@ Wees eerlijk maar niet streng — context telt. Een cola is een 2, kipfilet is e
   debouncedSave();
   renderVoeding();
   toast('Toegevoegd!');
+}
+
+function analyseVoeding(name, portie) {
+  const n = name.toLowerCase();
+
+  // Database van producten en patronen
+  const regels = [
+    // Ongezond (1-3)
+    { match: ['cola','fanta','sprite','7up','energy drink','red bull','monster','frisdrank','soda'], score: 2, groep: 'dranken', omschrijving: 'Veel suiker, weinig voedingswaarde', tip: 'Kies water of thee als alternatief' },
+    { match: ['chips','crisps','popcorn zoet','snoep','candy','chocolade','mars','snickers','twix','oreo','koek','cake','taart','gebak'], score: 2, groep: 'snacks', omschrijving: 'Veel suiker en/of verzadigd vet', tip: 'Af en toe is prima, houd het bij kleine porties' },
+    { match: ['friet','frites','patat','fastfood','mcdonalds','mc donald','big mac','hamburger','cheeseburger','pizza','kfc','burger king','whopper'], score: 3, groep: 'snacks', omschrijving: 'Calorierijk fastfood', tip: 'Geniet ervan, maar compenseer met groenten later' },
+    { match: ['bier','wijn','alcohol','whisky','jenever','wodka','borrel','cocktail'], score: 2, groep: 'dranken', omschrijving: 'Alcoholische drank', tip: 'Minder is beter voor herstel en slaap' },
+    // Matig (4-6)
+    { match: ['brood','boterham','sandwich','toast','crackers','beschuit','rijst','pasta','noodles','spaghetti'], score: 5, groep: 'granen', omschrijving: 'Koolhydraatbron', tip: 'Kies volkoren varianten voor meer vezels' },
+    { match: ['kaas','gouda','cheddar','brie','camembert'], score: 5, groep: 'zuivel', omschrijving: 'Eiwitten en vet', tip: 'Met mate een goede aanvulling' },
+    { match: ['aardappel','frites thuis','puree'], score: 5, groep: 'granen', omschrijving: 'Goede koolhydraatbron', tip: 'Gekookt beter dan gebakken' },
+    { match: ['soep','cup a soup','tomatensoep'], score: 5, groep: 'groenten', omschrijving: 'Afhankelijk van soort', tip: 'Zelfgemaakt heeft meer voedingswaarde' },
+    { match: ['melk','yoghurt','kwark','skyr'], score: 6, groep: 'zuivel', omschrijving: 'Goede bron van eiwitten en calcium', tip: '' },
+    // Gezond (7-9)
+    { match: ['kip','kipfilet','kippenborst','kalkoen','vis','zalm','tonijn','makreel','haring','garnalen'], score: 8, groep: 'eiwitten', omschrijving: 'Uitstekende eiwitbron', tip: '' },
+    { match: ['ei','eieren','omelet','roerei','scrambled'], score: 8, groep: 'eiwitten', omschrijving: 'Voedzame eiwitbron', tip: '' },
+    { match: ['rundvlees','biefstuk','gehakt','varkensvlees'], score: 6, groep: 'eiwitten', omschrijving: 'Goede eiwitbron, let op vet', tip: 'Kies mager vlees waar mogelijk' },
+    { match: ['salade','sla','spinazie','broccoli','courgette','tomaat','komkommer','paprika','wortel','bloemkool','spruitjes','andijvie','groente'], score: 9, groep: 'groenten', omschrijving: 'Uitstekend — vol vitamines', tip: '' },
+    { match: ['appel','peer','banaan','sinaasappel','druiven','aardbei','mango','ananas','fruit','bessen','blauwe bes'], score: 8, groep: 'groenten', omschrijving: 'Natuurlijk en voedzaam', tip: '' },
+    { match: ['noten','amandelen','walnoten','cashew','pinda','hazelnoten'], score: 7, groep: 'vetten', omschrijving: 'Gezonde vetten en eiwitten', tip: 'Let op de portiegrootte' },
+    { match: ['avocado','olijfolie','lijnzaad'], score: 8, groep: 'vetten', omschrijving: 'Gezonde onverzadigde vetten', tip: '' },
+    { match: ['water','spa','bronwater','mineraalwater'], score: 10, groep: 'dranken', omschrijving: 'Perfecte hydratatie', tip: '' },
+    { match: ['thee','groene thee','kruidenthee'], score: 9, groep: 'dranken', omschrijving: 'Gezonde drank vol antioxidanten', tip: '' },
+    { match: ['koffie'], score: 6, groep: 'dranken', omschrijving: 'Met mate prima', tip: 'Zonder suiker het gezondst' },
+    { match: ['smoothie','shake'], score: 7, groep: 'dranken', omschrijving: 'Afhankelijk van ingrediënten', tip: 'Let op toegevoegde suikers' },
+    { match: ['peulvruchten','linzen','kikkererwten','bonen','hummus'], score: 8, groep: 'eiwitten', omschrijving: 'Plantaardige eiwitten en vezels', tip: '' },
+    { match: ['havermout','muesli','granola'], score: 7, groep: 'granen', omschrijving: 'Volkoren en voedzaam', tip: 'Zonder toegevoegde suiker ideaal' },
+    { match: ['proteïne','protein shake','whey'], score: 8, groep: 'eiwitten', omschrijving: 'Gerichte eiwitaanvulling', tip: 'Goed na het sporten' },
+  ];
+
+  // Zoek beste match
+  let beste = null;
+  let besteScore = 0;
+  for (const regel of regels) {
+    for (const keyword of regel.match) {
+      if (n.includes(keyword)) {
+        const score = keyword.length; // langere match = specifieker
+        if (score > besteScore) {
+          besteScore = score;
+          beste = regel;
+        }
+      }
+    }
+  }
+
+  // Portie correctie
+  let scoreCorrectie = 0;
+  if (portie === 'groot') scoreCorrectie = beste ? (beste.score >= 7 ? 0 : -1) : 0;
+  if (portie === 'klein') scoreCorrectie = beste ? (beste.score <= 4 ? 1 : 0) : 0;
+
+  if (beste) {
+    return {
+      naam: name,
+      score: Math.min(10, Math.max(1, beste.score + scoreCorrectie)),
+      groep: beste.groep,
+      omschrijving: beste.omschrijving,
+      tip: beste.tip,
+    };
+  }
+
+  // Geen match — neutrale score
+  return {
+    naam: name,
+    score: 5,
+    groep: 'snacks',
+    omschrijving: 'Onbekend product',
+    tip: 'Voeg meer details toe voor een betere analyse',
+  };
 }
 
 function removeVoedingItem(id) {
@@ -2612,8 +2674,6 @@ function initApp() {
   renderAll();
 }
 window.initApp = initApp;
-window.initApp = initApp;
-window.renderAll = function() { renderAll(); };
 
 // Legacy init for localStorage fallback
 function init() {
