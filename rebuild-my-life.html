@@ -571,7 +571,7 @@ function startRealtimeSync(uid) {
       const data = docSnap.data();
       const keys = ['boodItems','boodNextId','boodFreq','boodWinkels','budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId','voedingItems','voedingNextId'];
       keys.forEach(k => { if (data[k] !== undefined) window.S[k] = data[k]; });
-      if (window.renderAll) window.renderAll();
+      if (window._renderAll) window._renderAll();
       setSyncStatus('synced');
     }
   }, (error) => {
@@ -2602,17 +2602,13 @@ function renderAll() {
   renderVoeding();
   renderDashboard();
 }
-window.renderAll = renderAll;
+window._renderAll = renderAll;
 
 function initApp() {
-  // Set date in nav
   const now = new Date();
   document.getElementById('nav-date').textContent = now.toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' });
-
-  // Set default date inputs
   document.getElementById('ag-date').value = today();
   document.getElementById('habit-week-input').value = today();
-
   renderAll();
 }
 window.initApp = initApp;
