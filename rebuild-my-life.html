@@ -513,7 +513,7 @@ onAuthStateChanged(auth, async (user) => {
     startRealtimeSync(user.uid);
 
     // Init app
-    initApp();
+    if (window.initApp) window.initApp();
 
   } else {
     currentUser = null;
@@ -532,15 +532,15 @@ async function loadFromFirestore(uid) {
     if (docSnap.exists()) {
       const data = docSnap.data();
       const keys = ['boodItems','boodNextId','boodFreq','boodWinkels','budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId','voedingItems','voedingNextId'];
-      keys.forEach(k => { if (data[k] !== undefined) S[k] = data[k]; });
-      if (data.qIdx !== undefined) S.qIdx = data.qIdx;
+      keys.forEach(k => { if (data[k] !== undefined) window.S[k] = data[k]; });
+      if (data.qIdx !== undefined) window.S.qIdx = data.qIdx;
     }
     setSyncStatus('synced');
   } catch(e) {
     console.error('Load error:', e);
     setSyncStatus('error');
     // Fall back to localStorage
-    load();
+    if (window.load) window.load();
   }
 }
 
@@ -548,18 +548,18 @@ window.saveToFirestore = async function() {
   if (!currentUser) return;
   setSyncStatus('syncing');
   try {
-    const keys = ['boodItems','boodNextId','boodFreq','boodWinkels','budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId','qIdx'];
+    const keys = ['boodItems','boodNextId','boodFreq','boodWinkels','budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId','qIdx','voedingItems','voedingNextId'];
     const data = { updatedAt: new Date().toISOString() };
-    keys.forEach(k => { data[k] = S[k]; });
+    keys.forEach(k => { data[k] = window.S[k]; });
     const docRef = doc(db, 'users', currentUser.uid, 'data', 'appdata');
     await setDoc(docRef, data, { merge: true });
     setSyncStatus('synced');
     // Also save to localStorage as backup
-    save();
+    if (window.save) window.save();
   } catch(e) {
     console.error('Save error:', e);
     setSyncStatus('error');
-    save(); // localStorage fallback
+    if (window.save) window.save();
   }
 };
 
@@ -570,8 +570,8 @@ function startRealtimeSync(uid) {
     if (docSnap.exists() && docSnap.metadata.hasPendingWrites === false) {
       const data = docSnap.data();
       const keys = ['boodItems','boodNextId','boodFreq','boodWinkels','budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId','voedingItems','voedingNextId'];
-      keys.forEach(k => { if (data[k] !== undefined) S[k] = data[k]; });
-      renderAll();
+      keys.forEach(k => { if (data[k] !== undefined) window.S[k] = data[k]; });
+      if (window.renderAll) window.renderAll();
       setSyncStatus('synced');
     }
   }, (error) => {
@@ -590,7 +590,7 @@ function setSyncStatus(status) {
 
 // Debounced save — wacht 1.5s na laatste wijziging
 window.debouncedSave = function() {
-  save(); // localStorage direct
+  if (window.save) window.save(); // localStorage direct
   clearTimeout(syncTimeout);
   syncTimeout = setTimeout(() => { window.saveToFirestore(); }, 1500);
 };
@@ -1272,7 +1272,7 @@ window.debouncedSave = function() {
 
 <script>
 // ---- STATE ----
-const S = {
+const S = window.S = {
   quotes: [
     { text: "Begin waar je bent. Gebruik wat je hebt. Doe wat je kunt.", author: "Arthur Ashe" },
     { text: "Elke dag is een nieuwe kans om opnieuw te beginnen.", author: "" },
@@ -1319,12 +1319,14 @@ function save() {
   keys.forEach(k => localStorage.setItem('rml_' + k, JSON.stringify(S[k])));
   localStorage.setItem('rml_qIdx', S.qIdx);
 }
+window.save = save;
 
 function load() {
   const keys = ['boodItems','boodNextId','boodFreq','boodWinkels','budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId','voedingItems','voedingNextId'];
   keys.forEach(k => { const v = localStorage.getItem('rml_' + k); if (v !== null) S[k] = JSON.parse(v); });
   const q = localStorage.getItem('rml_qIdx'); if (q !== null) S.qIdx = parseInt(q);
 }
+window.load = load;
 
 // ---- EXPORT / IMPORT ----
 function exportData() {
@@ -2589,7 +2591,7 @@ function quickAddVoeding(name) {
   addVoedingItem();
 }
 
-
+function renderAll() {
   renderQuote();
   renderBoodList();
   renderBudget();
@@ -2600,6 +2602,7 @@ function quickAddVoeding(name) {
   renderVoeding();
   renderDashboard();
 }
+window.renderAll = renderAll;
 
 function initApp() {
   // Set date in nav
@@ -2612,6 +2615,9 @@ function initApp() {
 
   renderAll();
 }
+window.initApp = initApp;
+window.initApp = initApp;
+window.renderAll = function() { renderAll(); };
 
 // Legacy init for localStorage fallback
 function init() {
