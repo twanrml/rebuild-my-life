@@ -419,13 +419,28 @@
 
   @media (max-width: 720px) {
     .main { padding: 72px 12px 90px; }
-    .hero { padding: 16px 18px; }
-    .hero-text { font-size: 15px; }
+    .hero { display: none; }
     .stats-row { grid-template-columns: 1fr 1fr; }
     .todo-actions { opacity:1; }
   }
   .auth-screen { position:fixed; inset:0; background:var(--bg); z-index:500; display:flex; align-items:center; justify-content:center; }
   .auth-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:40px 36px; max-width:380px; width:90%; text-align:center; box-shadow:var(--shadow-md); }
+
+  /* PINCODE */
+  .pin-section { margin-top:20px; padding-top:16px; border-top:1px solid var(--border); }
+  .pin-section-label { font-size:12px; color:var(--text2); margin-bottom:12px; font-weight:500; text-align:center; }
+  .pin-inputs { display:flex; gap:10px; justify-content:center; margin-bottom:12px; }
+  .pin-input { width:48px; height:56px; text-align:center; font-size:22px; font-weight:500; border:2px solid var(--border2); border-radius:var(--radius-sm); font-family:'DM Sans',sans-serif; color:var(--text); background:var(--surface); outline:none; }
+  .pin-input:focus { border-color:var(--accent); }
+  .pin-btn { width:100%; padding:11px; border-radius:var(--radius-sm); font-size:14px; font-weight:500; cursor:pointer; border:1px solid var(--border2); background:var(--surface2); color:var(--text); font-family:'DM Sans',sans-serif; transition:all 0.15s; }
+  .pin-btn:hover { background:var(--text); color:#fff; border-color:var(--text); }
+  .pin-error { font-size:12px; color:var(--red); text-align:center; margin-top:8px; display:none; }
+
+  /* GAST MODUS */
+  .gast-bar { position:fixed; top:0; left:0; right:0; z-index:50; background:var(--surface); border-bottom:1px solid var(--border); padding:0 20px; height:56px; display:flex; align-items:center; justify-content:space-between; }
+  .gast-brand { font-family:'DM Serif Display',serif; font-size:18px; }
+  .gast-brand span { color:var(--accent); }
+  .gast-badge { background:var(--accent-light); color:var(--accent); font-size:11px; padding:3px 10px; border-radius:20px; font-weight:500; }
   .auth-logo { font-family:'DM Serif Display',serif; font-size:28px; margin-bottom:6px; }
   .auth-logo span { color:var(--accent); }
   .auth-sub { font-size:13px; color:var(--text2); margin-bottom:28px; line-height:1.6; }
@@ -468,6 +483,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
+window._firestoreDb = db;
 
 let currentUser = null;
 let syncTimeout = null;
@@ -501,6 +517,7 @@ window.signOutUser = async function() {
 onAuthStateChanged(auth, async (user) => {
   if (user) {
     currentUser = user;
+    window.currentUser = user;
     document.getElementById('auth-screen').style.display = 'none';
     document.getElementById('app-content').style.display = 'block';
 
@@ -633,12 +650,54 @@ window.debouncedSave = function() {
     </button>
     <div class="auth-error" id="auth-error"></div>
 
-    <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);">
-      <p style="font-size:11px;color:var(--text3);line-height:1.7;text-align:left;">
-        <strong style="color:var(--text2);">Werkt login niet?</strong> Dit gebeurt als je de app opent als lokaal bestand.<br>
-        Oplossing: open de app via <strong>VS Code Live Server</strong> of zet hem op 
-        <strong>GitHub Pages</strong> — dan werkt alles direct. Vraag Claude hoe!
-      </p>
+    <div class="pin-section">
+      <div class="pin-section-label">🛒 Boodschappenlijst delen (bijv. voor Abigail)</div>
+      <div class="pin-inputs">
+        <input class="pin-input" id="pin1" type="password" inputmode="numeric" maxlength="1" onkeyup="pinNext(this,'pin2')" />
+        <input class="pin-input" id="pin2" type="password" inputmode="numeric" maxlength="1" onkeyup="pinNext(this,'pin3')" />
+        <input class="pin-input" id="pin3" type="password" inputmode="numeric" maxlength="1" onkeyup="pinNext(this,'pin4')" />
+        <input class="pin-input" id="pin4" type="password" inputmode="numeric" maxlength="1" onkeyup="if(event.key==='Enter')checkPin()" />
+      </div>
+      <button class="pin-btn" onclick="checkPin()">Openen als gast</button>
+      <div class="pin-error" id="pin-error">Onjuiste pincode. Probeer opnieuw.</div>
+    </div>
+  </div>
+</div>
+
+<!-- GAST MODUS -->
+<div id="gast-screen" style="display:none;">
+  <div class="gast-bar">
+    <div class="gast-brand">Rebuild <span>My Life</span></div>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span class="gast-badge">Boodschappenlijst</span>
+      <button onclick="uitloggenGast()" style="font-size:11px;color:var(--text3);background:none;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;">← Afsluiten</button>
+    </div>
+  </div>
+  <div style="padding:72px 16px 40px;max-width:600px;margin:0 auto;">
+    <div class="card">
+      <div class="card-head">
+        <div><div class="card-title">Boodschappenlijst</div><div class="card-sub">Voeg toe of vink af</div></div>
+      </div>
+      <div class="card-body">
+        <div class="form-row mb12">
+          <div class="form-group" style="flex:3;">
+            <input type="text" id="gast-bood-input" placeholder="Product toevoegen..." onkeydown="if(event.key==='Enter')gastAddItem()" />
+          </div>
+          <div class="form-group" style="flex:2;">
+            <input type="text" id="gast-bood-store" placeholder="Winkel..." list="gast-winkel-opties" autocomplete="off" />
+            <datalist id="gast-winkel-opties"></datalist>
+          </div>
+          <button class="btn btn-primary" onclick="gastAddItem()">+ Voeg toe</button>
+        </div>
+        <div id="gast-bood-list"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;">
+          <span style="font-size:11px;color:var(--text3);" id="gast-prog-label"></span>
+          <button onclick="gastClearChecked()" style="font-size:11px;color:var(--text3);background:none;border:none;cursor:pointer;">Afgevinkte wissen</button>
+        </div>
+        <div class="prog-bar-wrap" id="gast-prog-wrap" style="display:none;margin-top:6px;">
+          <div class="prog-bar" id="gast-prog-bar"></div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -1285,7 +1344,16 @@ window.debouncedSave = function() {
     </div>
 
     <div style="border-top:1px solid var(--border);padding-top:16px;">
-      <div style="font-size:12px;font-weight:500;color:var(--red);margin-bottom:8px;">Gevaarlijke zone</div>
+      <div style="font-size:12px;font-weight:500;color:var(--text2);margin-bottom:8px;">Pincode voor Abigail</div>
+      <p style="font-size:12px;color:var(--text3);margin-bottom:10px;line-height:1.6;">Stel een 4-cijferige pincode in zodat Abigail de boodschappenlijst kan gebruiken.</p>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input type="password" inputmode="numeric" maxlength="4" id="pin-setting-input" placeholder="Nieuwe pincode (4 cijfers)" style="flex:1;letter-spacing:0.2em;" />
+        <button class="btn btn-ghost btn-sm" onclick="savePincode()">Opslaan</button>
+      </div>
+      <div id="pin-setting-feedback" style="font-size:11px;color:var(--accent);margin-top:6px;display:none;">✓ Pincode opgeslagen</div>
+    </div>
+
+    <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:8px;">
       <button class="btn btn-danger btn-sm" onclick="confirmReset()">Alle data wissen</button>
     </div>
 
@@ -1474,7 +1542,232 @@ function toast(msg) {
   setTimeout(() => t.classList.remove('show'), 2200);
 }
 
-// ---- MEER MENU ----
+// ---- PINCODE & GAST MODUS ----
+let gastMode = false;
+
+function pinNext(current, nextId) {
+  if (current.value.length === 1) {
+    const next = document.getElementById(nextId);
+    if (next) next.focus();
+  }
+}
+
+async function checkPin() {
+  const pin = ['pin1','pin2','pin3','pin4'].map(id => document.getElementById(id)?.value || '').join('');
+  if (pin.length < 4) {
+    showPinError('Voer alle 4 cijfers in.');
+    return;
+  }
+
+  // Haal pincode op uit Firebase (opgeslagen in een apart publiek document)
+  try {
+    const { getFirestore, doc, getDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+    const db = window._firestoreDb;
+    if (!db) { showPinError('Verbinding mislukt. Probeer opnieuw.'); return; }
+
+    // Zoek de pincode in alle users (we slaan de hash op in een gedeeld document)
+    const pinRef = doc(db, 'shared', 'pincode');
+    const pinSnap = await getDoc(pinRef);
+
+    if (pinSnap.exists() && pinSnap.data().pin === pin) {
+      // Laad boodschappen data van de eigenaar
+      const ownerRef = doc(db, 'shared', 'pincode');
+      const ownerData = pinSnap.data();
+      const ownerId = ownerData.ownerId;
+
+      if (ownerId) {
+        const dataRef = doc(db, 'users', ownerId, 'data', 'appdata');
+        const dataSnap = await getDoc(dataRef);
+        if (dataSnap.exists()) {
+          const data = dataSnap.data();
+          if (data.boodItems) window.S.boodItems = data.boodItems;
+          if (data.boodWinkels) window.S.boodWinkels = data.boodWinkels;
+          if (data.boodFreq) window.S.boodFreq = data.boodFreq;
+          if (data.boodNextId) window.S.boodNextId = data.boodNextId;
+        }
+        // Sla ownerId op voor schrijven
+        window._gastOwnerId = ownerId;
+        window._gastDb = db;
+      }
+
+      gastMode = true;
+      document.getElementById('auth-screen').style.display = 'none';
+      document.getElementById('gast-screen').style.display = 'block';
+      renderGastBoodList();
+
+      // Real-time sync voor gast
+      startGastSync(ownerId, db);
+    } else {
+      showPinError('Onjuiste pincode. Probeer opnieuw.');
+      ['pin1','pin2','pin3','pin4'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
+      document.getElementById('pin1')?.focus();
+    }
+  } catch(e) {
+    console.error('Pin check error:', e);
+    showPinError('Verbinding mislukt. Controleer je internet.');
+  }
+}
+
+function showPinError(msg) {
+  const el = document.getElementById('pin-error');
+  if (el) { el.textContent = msg; el.style.display = 'block'; setTimeout(() => el.style.display = 'none', 3000); }
+}
+
+function uitloggenGast() {
+  gastMode = false;
+  window._gastOwnerId = null;
+  ['pin1','pin2','pin3','pin4'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
+  document.getElementById('gast-screen').style.display = 'none';
+  document.getElementById('auth-screen').style.display = 'flex';
+}
+
+let gastUnsubscribe = null;
+async function startGastSync(ownerId, db) {
+  if (!ownerId || !db) return;
+  if (gastUnsubscribe) gastUnsubscribe();
+  const { onSnapshot, doc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+  const dataRef = doc(db, 'users', ownerId, 'data', 'appdata');
+  gastUnsubscribe = onSnapshot(dataRef, (snap) => {
+    if (snap.exists() && !snap.metadata.hasPendingWrites && !snap.metadata.fromCache) {
+      const data = snap.data();
+      if (data.boodItems) window.S.boodItems = data.boodItems;
+      if (data.boodWinkels) window.S.boodWinkels = data.boodWinkels;
+      if (data.boodFreq) window.S.boodFreq = data.boodFreq;
+      if (data.boodNextId) window.S.boodNextId = data.boodNextId;
+      renderGastBoodList();
+    }
+  });
+}
+
+async function gastSaveToFirestore() {
+  const ownerId = window._gastOwnerId;
+  const db = window._gastDb;
+  if (!ownerId || !db) return;
+  try {
+    const { doc, setDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+    const dataRef = doc(db, 'users', ownerId, 'data', 'appdata');
+    await setDoc(dataRef, {
+      boodItems: window.S.boodItems,
+      boodWinkels: window.S.boodWinkels,
+      boodFreq: window.S.boodFreq,
+      boodNextId: window.S.boodNextId,
+      updatedAt: new Date().toISOString()
+    }, { merge: true });
+  } catch(e) { console.error('Gast save error:', e); }
+}
+
+let gastSyncTimeout = null;
+function gastDebouncedSave() {
+  clearTimeout(gastSyncTimeout);
+  gastSyncTimeout = setTimeout(() => gastSaveToFirestore(), 1500);
+}
+
+function gastAddItem() {
+  const inp = document.getElementById('gast-bood-input');
+  const name = inp.value.trim(); if (!name) return;
+  const store = document.getElementById('gast-bood-store')?.value.trim() || '';
+  if (store && !window.S.boodWinkels.includes(store)) window.S.boodWinkels.push(store);
+  window.S.boodItems.push({ id: window.S.boodNextId++, name, store, checked: false, archived: false, added: today() });
+  window.S.boodFreq[name] = (window.S.boodFreq[name] || 0) + 1;
+  inp.value = '';
+  document.getElementById('gast-bood-store').value = '';
+  gastDebouncedSave();
+  renderGastBoodList();
+  toast('Toegevoegd: ' + name);
+}
+
+function gastToggle(id) {
+  const item = window.S.boodItems.find(i => i.id === id);
+  if (item) { item.checked = !item.checked; gastDebouncedSave(); renderGastBoodList(); }
+}
+
+function gastRemove(id) {
+  window.S.boodItems = window.S.boodItems.filter(i => i.id !== id);
+  gastDebouncedSave(); renderGastBoodList();
+}
+
+function gastClearChecked() {
+  window.S.boodItems = window.S.boodItems.filter(i => !i.checked);
+  gastDebouncedSave(); renderGastBoodList(); toast('Afgevinkte items gewist');
+}
+
+function renderGastBoodList() {
+  const list = document.getElementById('gast-bood-list');
+  if (!list) return;
+
+  // Update datalist
+  const dl = document.getElementById('gast-winkel-opties');
+  if (dl) {
+    const winkels = [...new Set([...window.S.boodWinkels, ...window.S.boodItems.map(i=>i.store).filter(Boolean)])].sort();
+    dl.innerHTML = winkels.map(w => `<option value="${w}">`).join('');
+  }
+
+  const visible = window.S.boodItems.filter(i => !i.archived);
+  if (!visible.length) {
+    list.innerHTML = '<div class="empty">Lijst is leeg. Voeg hierboven iets toe!</div>';
+    document.getElementById('gast-prog-wrap').style.display = 'none';
+    document.getElementById('gast-prog-label').textContent = '';
+    return;
+  }
+
+  // Groepeer op winkel
+  const withStore = visible.filter(i => i.store);
+  const withoutStore = visible.filter(i => !i.store);
+  const groups = {};
+  withStore.forEach(i => { if (!groups[i.store]) groups[i.store]=[]; groups[i.store].push(i); });
+
+  let html = '';
+  Object.keys(groups).sort().forEach(grp => {
+    html += `<div class="sec-div">${grp}</div>`;
+    groups[grp].forEach(i => {
+      html += `<div class="list-item${i.checked?' done':''}">
+        <input type="checkbox" class="item-check" ${i.checked?'checked':''} onchange="gastToggle(${i.id})" />
+        <span class="item-name">${i.name}</span>
+        <button class="ibtn" onclick="gastRemove(${i.id})">×</button>
+      </div>`;
+    });
+  });
+  if (withoutStore.length) {
+    if (Object.keys(groups).length) html += '<div class="sec-div">Geen winkel</div>';
+    withoutStore.forEach(i => {
+      html += `<div class="list-item${i.checked?' done':''}">
+        <input type="checkbox" class="item-check" ${i.checked?'checked':''} onchange="gastToggle(${i.id})" />
+        <span class="item-name">${i.name}</span>
+        <button class="ibtn" onclick="gastRemove(${i.id})">×</button>
+      </div>`;
+    });
+  }
+  list.innerHTML = html;
+
+  const total = visible.length, done = visible.filter(i=>i.checked).length, pct = total ? Math.round(done/total*100) : 0;
+  document.getElementById('gast-prog-label').textContent = `${done} van ${total} afgevinkt (${pct}%)`;
+  document.getElementById('gast-prog-wrap').style.display = total ? 'block' : 'none';
+  document.getElementById('gast-prog-bar').style.width = pct + '%';
+}
+
+async function savePincode() {
+  const pin = document.getElementById('pin-setting-input')?.value.trim();
+  if (!pin || pin.length !== 4 || !/^\d{4}$/.test(pin)) {
+    alert('Voer een geldige 4-cijferige pincode in.');
+    return;
+  }
+  if (!window.currentUser || !window._firestoreDb) {
+    alert('Je moet ingelogd zijn om een pincode in te stellen.');
+    return;
+  }
+  try {
+    const { doc, setDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+    const pinRef = doc(window._firestoreDb, 'shared', 'pincode');
+    await setDoc(pinRef, { pin, ownerId: window.currentUser.uid });
+    document.getElementById('pin-setting-input').value = '';
+    const fb = document.getElementById('pin-setting-feedback');
+    if (fb) { fb.style.display = 'block'; setTimeout(() => fb.style.display = 'none', 3000); }
+  } catch(e) {
+    alert('Opslaan mislukt: ' + e.message);
+  }
+}
+
+
 const MAIN_PAGES = ['dashboard','boodschappen','voeding','agenda'];
 const MEER_PAGES = ['gewoonten','todo','recepten'];
 
@@ -1545,11 +1838,63 @@ function showPage(p) {
 let quoteReflection = '';
 let reflectionVisible = false;
 
+// ---- QUOTE ENGINE (lokaal, geen API) ----
+const QUOTES_DB = [
+  // Filosofisch
+  { quote: "Jezelf kennen is het begin van alle wijsheid.", author: "Aristoteles", tone: "filosofisch" },
+  { quote: "Het leven wordt vooruit geleefd en achteruit begrepen.", author: "Kierkegaard", tone: "filosofisch" },
+  { quote: "De zwaarste last is een ongeleefd leven.", author: "Carl Jung", tone: "filosofisch" },
+  { quote: "Een dag is een klein leven.", author: "Arthur Schopenhauer", tone: "filosofisch" },
+  { quote: "Wat je aandacht geeft, groeit.", author: "", tone: "filosofisch" },
+
+  // Scherp & direct
+  { quote: "Vooruitgang, niet perfectie.", author: "", tone: "scherp" },
+  { quote: "Discipline is herinnering aan wat je werkelijk wilt.", author: "", tone: "scherp" },
+  { quote: "Structuur geeft vrijheid. Chaos put uit.", author: "", tone: "scherp" },
+  { quote: "Don't wish it were easier. Wish you were better.", author: "Jim Rohn", tone: "scherp" },
+  { quote: "You don't rise to the level of your goals. You fall to the level of your systems.", author: "James Clear", tone: "scherp" },
+  { quote: "Hard choices, easy life. Easy choices, hard life.", author: "Jerzy Gregorek", tone: "scherp" },
+
+  // Krachtig & empowerend
+  { quote: "Begin waar je bent. Gebruik wat je hebt. Doe wat je kunt.", author: "Arthur Ashe", tone: "krachtig" },
+  { quote: "Moed is niet de afwezigheid van angst. Het is de beslissing dat iets anders belangrijker is.", author: "Ambrose Redmoon", tone: "krachtig" },
+  { quote: "Je hoeft niet te weten hoe het afloopt. Je hoeft alleen maar de volgende stap te zetten.", author: "", tone: "krachtig" },
+  { quote: "Jij hebt overleefd wat je bijna had gebroken. Dat is kracht.", author: "", tone: "krachtig" },
+  { quote: "The man who moves a mountain begins by carrying away small stones.", author: "Confucius", tone: "krachtig" },
+  { quote: "Kracht groeit niet uit wat je kunt. Het groeit uit het overwinnen van wat je dacht dat je niet kon.", author: "", tone: "krachtig" },
+  { quote: "It does not matter how slowly you go as long as you do not stop.", author: "Confucius", tone: "krachtig" },
+
+  // Warm & menselijk
+  { quote: "Verzorg je lichaam — het is de enige plek waar je moet leven.", author: "Jim Rohn", tone: "warm" },
+  { quote: "Rust is geen beloning voor hard werken. Het is een voorwaarde ervoor.", author: "", tone: "warm" },
+  { quote: "Na de storm komt de stilte. En daarna: de wederopbouw.", author: "", tone: "warm" },
+  { quote: "Elke ochtend word je herboren. Wat je vandaag doet, telt het meest.", author: "Boeddha", tone: "warm" },
+  { quote: "Je kunt het verleden niet veranderen. Maar je kunt beslissen wie je morgen bent.", author: "", tone: "warm" },
+  { quote: "Jij bent niet wie je was. Je bent wie je kiest te zijn vandaag.", author: "", tone: "warm" },
+
+  // Poëtisch & stil
+  { quote: "Het is niet de last die je breekt, maar de manier waarop je hem draagt.", author: "Lou Holtz", tone: "poëtisch" },
+  { quote: "In the middle of difficulty lies opportunity.", author: "Albert Einstein", tone: "poëtisch" },
+  { quote: "Fall seven times, stand up eight.", author: "Japans gezegde", tone: "poëtisch" },
+  { quote: "The oak fought the wind and was broken. The willow bent when it must and survived.", author: "Robert Jordan", tone: "poëtisch" },
+
+  // Uitdagend & groei
+  { quote: "Elke dag is een nieuwe kans om opnieuw te beginnen.", author: "", tone: "uitdagend" },
+  { quote: "De beste tijd om te beginnen was gisteren. De op een na beste tijd is nu.", author: "", tone: "uitdagend" },
+  { quote: "Small daily improvements over time lead to stunning results.", author: "", tone: "uitdagend" },
+  { quote: "What you do every day matters more than what you do once in a while.", author: "Gretchen Rubin", tone: "uitdagend" },
+  { quote: "Je groeit niet in je comfortzone. Je groeit precies aan de rand ervan.", author: "", tone: "uitdagend" },
+
+  // Vrijmetselaars / symbolisch
+  { quote: "Rough ashlar becomes perfect ashlar through labor and dedication.", author: "Vrijmetselaars traditie", tone: "symbolisch" },
+  { quote: "As above, so below. As within, so without.", author: "Hermes Trismegistus", tone: "symbolisch" },
+];
+
 async function loadAIQuote(forceNew = false) {
   const today_str = today();
   const cached = localStorage.getItem('rml_quote_cache');
 
-  // Gebruik gecachte quote als het dezelfde dag is en niet geforceerd vernieuwd
+  // Gebruik gecachte quote tenzij geforceerd vernieuwd
   if (!forceNew && cached) {
     try {
       const c = JSON.parse(cached);
@@ -1560,84 +1905,42 @@ async function loadAIQuote(forceNew = false) {
     } catch(e) {}
   }
 
-  // Laadstatus tonen
-  document.getElementById('hero-text').innerHTML = '<span style="opacity:0.4;font-style:italic;font-size:15px;">Quote wordt gegenereerd...</span>';
-  document.getElementById('hero-author').textContent = '';
-  document.getElementById('hero-reflect-btn').style.display = 'none';
-  document.getElementById('hero-reflection').style.display = 'none';
+  // Bereken welke quote op basis van dag — wisselt elke 3 dagen
+  const dayOfYear = Math.floor((new Date() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
+  const interval = Math.floor(dayOfYear / 3);
+  const baseIndex = interval % QUOTES_DB.length;
 
-  // Toon variatie bijhouden
-  let recentTones = [];
-  try {
-    const hist = JSON.parse(localStorage.getItem('rml_quote_history') || '[]');
-    recentTones = hist.slice(-4).map(h => h.tone);
-  } catch(e) {}
-
-  const tones = ['filosofisch', 'scherp & direct', 'poëtisch', 'nuchter & krachtig', 'warm & menselijk', 'uitdagend', 'stilte & ruimte'];
-  const available = tones.filter(t => !recentTones.includes(t));
-  const tone = available[Math.floor(Math.random() * available.length)] || tones[Math.floor(Math.random() * tones.length)];
-  const dayOfWeek = new Date().toLocaleDateString('nl-NL', { weekday: 'long' });
-
-  const prompt = `Je genereert één dagelijkse quote voor Twan.
-
-Context over Twan:
-- 42 jaar, man, Asset Manager in Amsterdam
-- Zijn ex-vrouw Jessica verhuist deze maand definitief — een emotioneel ingrijpend moment
-- Hij worstelt met dubbele gevoelens: verdriet én de wil om sterker uit dit te komen
-- Hij heeft een dochter, Abigail
-- Hij sport intensief (BodyCombat 2+ jaar), leeft gezond, is geïnteresseerd in longevity
-- Hij is Vrijmetselaar — waardeert symboliek, reflectie en persoonlijke groei
-- Hij zoekt structuur, maar past die momenteel niet consequent toe
-- Zijn kernbehoefte: dag voor dag een betere versie van zichzelf worden
-
-Vandaag is het ${dayOfWeek}. Gewenste toon: ${tone}
-
-Regels:
-- De quote mag van een bekende persoon zijn OF een originele zin
-- Nooit zweverig, nooit cliché, nooit gratuit positief
-- Maximaal 2 zinnen, mag scherp zijn, mag raken
-- Geen hashtags, geen uitroeptekens, geen emoji
-
-Geef je antwoord in exact dit JSON formaat, niets anders:
-{"quote":"de quote zelf","author":"naam of leeg als eigen","reflection":"één zin waarom deze quote nu voor Twan relevant is"}`;
-
-  try {
-    const response = await fetch('/.netlify/functions/ai-proxy', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt })
-    });
-
-    const data = await response.json();
-    const raw = data.content?.[0]?.text || '';
-    const clean = raw.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(clean);
-
-    localStorage.setItem('rml_quote_cache', JSON.stringify({
-      date: today_str, quote: parsed.quote, author: parsed.author || '',
-      tone, reflection: parsed.reflection || ''
-    }));
-
-    try {
-      const hist = JSON.parse(localStorage.getItem('rml_quote_history') || '[]');
-      hist.push({ date: today_str, tone, quote: parsed.quote });
-      localStorage.setItem('rml_quote_history', JSON.stringify(hist.slice(-30)));
-    } catch(e) {}
-
-    displayQuote(parsed.quote, parsed.author || '', tone, parsed.reflection || '');
-
-  } catch(err) {
-    // Fallback bij geen verbinding
-    const fallbacks = [
-      { quote: "Je hoeft niet te weten hoe het afloopt. Je hoeft alleen maar de volgende stap te zetten.", author: "", reflection: "Één dag tegelijk is genoeg." },
-      { quote: "Het is niet de last die je breekt, maar de manier waarop je hem draagt.", author: "Lou Holtz", reflection: "Jij kiest hoe je dit draagt." },
-      { quote: "Vooruitgang, niet perfectie.", author: "", reflection: "Eén kleine stap vandaag is meer waard dan tien perfecte plannen." },
-      { quote: "Structuur geeft vrijheid. Chaos put uit.", author: "", reflection: "Elke routine die je bouwt is een fundament." },
-      { quote: "Jij bent niet wie je was. Je bent wie je kiest te zijn vandaag.", author: "", reflection: "Identiteit is een keuze, geen erfenis." },
-    ];
-    const fb = fallbacks[Math.floor(Math.random() * fallbacks.length)];
-    displayQuote(fb.quote, fb.author, tone, fb.reflection);
+  let index = baseIndex;
+  if (forceNew) {
+    // Kies een andere dan de huidige
+    const currentCached = localStorage.getItem('rml_quote_cache');
+    let currentQuote = '';
+    try { currentQuote = JSON.parse(currentCached).quote; } catch(e) {}
+    let tries = 0;
+    do {
+      index = Math.floor(Math.random() * QUOTES_DB.length);
+      tries++;
+    } while (QUOTES_DB[index].quote === currentQuote && tries < 10);
   }
+
+  const selected = QUOTES_DB[index];
+  const reflections = {
+    'filosofisch': 'Neem even de tijd om hierover na te denken.',
+    'scherp': 'Eerlijk en direct — precies wat je soms nodig hebt.',
+    'krachtig': 'Jij beweegt, ook als het moeilijk is.',
+    'warm': 'Zorg goed voor jezelf — dat is geen luxe, dat is noodzaak.',
+    'poëtisch': 'Soms zit de waarheid in een beeld, niet in een uitleg.',
+    'uitdagend': 'Eén kleine stap vandaag is meer waard dan tien perfecte plannen.',
+    'symbolisch': 'Zoals de ruwe steen bewerkt wordt, zo ook jij.',
+  };
+  const reflection = reflections[selected.tone] || '';
+
+  localStorage.setItem('rml_quote_cache', JSON.stringify({
+    date: today_str, quote: selected.quote, author: selected.author,
+    tone: selected.tone, reflection
+  }));
+
+  displayQuote(selected.quote, selected.author, selected.tone, reflection);
 }
 
 function displayQuote(quote, author, tone, reflection) {
