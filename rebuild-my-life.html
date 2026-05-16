@@ -534,6 +534,7 @@ async function loadFromFirestore(uid) {
   } catch(e) {
     console.error('Load error:', e);
     setSyncStatus('error');
+    // Fall back to localStorage
     if (window.load) window.load();
   }
 }
@@ -548,6 +549,7 @@ window.saveToFirestore = async function() {
     const docRef = doc(db, 'users', currentUser.uid, 'data', 'appdata');
     await setDoc(docRef, data, { merge: true });
     setSyncStatus('synced');
+    // Also save to localStorage as backup
     if (window.save) window.save();
   } catch(e) {
     console.error('Save error:', e);
@@ -561,8 +563,11 @@ function startRealtimeSync(uid) {
   const docRef = doc(db, 'users', uid, 'data', 'appdata');
   let lastSyncTs = 0;
   unsubscribeSnapshot = onSnapshot(docRef, { includeMetadataChanges: false }, (docSnap) => {
+    // Alleen verwerken als het van de server komt (niet onze eigen pending write)
     if (docSnap.exists() && !docSnap.metadata.hasPendingWrites && !docSnap.metadata.fromCache) {
       const data = docSnap.data();
+      const serverTs = data.updatedAt || '';
+      // Sla over als we zelf recent geschreven hebben (binnen 3 seconden)
       const now = Date.now();
       if (now - lastLocalWrite < 3000) return;
       lastSyncTs = now;
@@ -614,9 +619,6 @@ window.debouncedSave = function() {
       Doorgaan met Google
     </button>
     <div class="auth-error" id="auth-error"></div>
-
-  </div>
-</div>
 
 <!-- APP CONTENT (hidden until logged in) -->
 <div id="app-content" style="display:none;">
@@ -1453,1459 +1455,1306 @@ function toast(msg) {
 
 
 
-!DOCTYPE html>
-<html lang="nl">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Rebuild My Life</title>
-<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg: #F7F5F0;
-    --surface: #FFFFFF;
-    --surface2: #F0EDE6;
-    --border: rgba(0,0,0,0.08);
-    --border2: rgba(0,0,0,0.14);
-    --text: #1A1814;
-    --text2: #6B6660;
-    --text3: #A09890;
-    --accent: #2D5016;
-    --accent-light: #EAF0E2;
-    --accent2: #5C3D1E;
-    --accent2-light: #F5EDE4;
-    --red: #8B2020;
-    --red-light: #F5E8E8;
-    --blue: #1E3F5C;
-    --blue-light: #E4EDF5;
-    --gold: #7A5C1E;
-    --gold-light: #F5F0E4;
-    --radius: 14px;
-    --radius-sm: 8px;
-    --shadow: 0 2px 16px rgba(0,0,0,0.06);
-    --shadow-md: 0 4px 24px rgba(0,0,0,0.1);
+
+
+
+
+const MAIN_PAGES = ['dashboard','boodschappen','voeding','agenda'];
+const MEER_PAGES = ['gewoonten','todo','recepten'];
+
+function toggleMeerMenu() {
+  const menu = document.getElementById('meer-menu');
+  const overlay = document.getElementById('meer-overlay');
+  const isOpen = menu.classList.contains('open');
+  if (isOpen) { closeMeerMenu(); } else {
+    menu.classList.add('open');
+    overlay.classList.add('open');
+  }
+}
+
+function closeMeerMenu() {
+  document.getElementById('meer-menu')?.classList.remove('open');
+  document.getElementById('meer-overlay')?.classList.remove('open');
+}
+
+function showPageFromMeer(p) {
+  closeMeerMenu();
+  showPage(p);
+}
+
+function updateMobileNav(p) {
+  // Reset alle knoppen
+  MAIN_PAGES.forEach(pg => {
+    document.getElementById('mnav-' + pg)?.classList.remove('active');
+  });
+  document.getElementById('mnav-meer')?.classList.remove('active');
+  MEER_PAGES.forEach(pg => {
+    document.getElementById('mmitem-' + pg)?.classList.remove('active');
+  });
+
+  if (MAIN_PAGES.includes(p)) {
+    document.getElementById('mnav-' + p)?.classList.add('active');
+  } else if (MEER_PAGES.includes(p)) {
+    document.getElementById('mnav-meer')?.classList.add('active');
+    document.getElementById('mmitem-' + p)?.classList.add('active');
+  }
+}
+
+
+let currentPage = 'dashboard';
+function showPage(p) {
+  document.querySelectorAll('.page').forEach(x => x.classList.remove('active'));
+  document.getElementById('page-' + p).classList.add('active');
+  document.querySelectorAll('.nav-tab').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(x => {
+    const t = x.textContent.toLowerCase();
+    if (p==='dashboard'&&t.includes('dash')) x.classList.add('active');
+    else if (p==='boodschappen'&&t.includes('bood')) x.classList.add('active');
+    else if (p==='todo'&&t.includes('to-do')) x.classList.add('active');
+    else if (p==='agenda'&&t.includes('agenda')) x.classList.add('active');
+    else if (p==='gewoonten'&&t.includes('gewoont')) x.classList.add('active');
+    else if (p==='voeding'&&t.includes('voeding')) x.classList.add('active');
+    else if (p==='recepten'&&t.includes('recept')) x.classList.add('active');
+  });
+  document.querySelectorAll('.mobile-nav-btn').forEach(x => x.classList.remove('active'));
+  const mobilePages = ['dashboard','boodschappen','voeding','agenda'];
+  const mIdx = mobilePages.indexOf(p);
+  if (mIdx >= 0) document.querySelectorAll('.mobile-nav-btn')[mIdx]?.classList.add('active');
+  updateMobileNav(p);
+  currentPage = p;
+  renderAll();
+}
+
+// ---- AI QUOTE ENGINE ----
+let quoteReflection = '';
+let reflectionVisible = false;
+
+// ---- QUOTE ENGINE (lokaal, geen API) ----
+const QUOTES_DB = [
+  // Filosofisch
+  { quote: "Jezelf kennen is het begin van alle wijsheid.", author: "Aristoteles", tone: "filosofisch" },
+  { quote: "Het leven wordt vooruit geleefd en achteruit begrepen.", author: "Kierkegaard", tone: "filosofisch" },
+  { quote: "De zwaarste last is een ongeleefd leven.", author: "Carl Jung", tone: "filosofisch" },
+  { quote: "Een dag is een klein leven.", author: "Arthur Schopenhauer", tone: "filosofisch" },
+  { quote: "Wat je aandacht geeft, groeit.", author: "", tone: "filosofisch" },
+
+  // Scherp & direct
+  { quote: "Vooruitgang, niet perfectie.", author: "", tone: "scherp" },
+  { quote: "Discipline is herinnering aan wat je werkelijk wilt.", author: "", tone: "scherp" },
+  { quote: "Structuur geeft vrijheid. Chaos put uit.", author: "", tone: "scherp" },
+  { quote: "Don't wish it were easier. Wish you were better.", author: "Jim Rohn", tone: "scherp" },
+  { quote: "You don't rise to the level of your goals. You fall to the level of your systems.", author: "James Clear", tone: "scherp" },
+  { quote: "Hard choices, easy life. Easy choices, hard life.", author: "Jerzy Gregorek", tone: "scherp" },
+
+  // Krachtig & empowerend
+  { quote: "Begin waar je bent. Gebruik wat je hebt. Doe wat je kunt.", author: "Arthur Ashe", tone: "krachtig" },
+  { quote: "Moed is niet de afwezigheid van angst. Het is de beslissing dat iets anders belangrijker is.", author: "Ambrose Redmoon", tone: "krachtig" },
+  { quote: "Je hoeft niet te weten hoe het afloopt. Je hoeft alleen maar de volgende stap te zetten.", author: "", tone: "krachtig" },
+  { quote: "Jij hebt overleefd wat je bijna had gebroken. Dat is kracht.", author: "", tone: "krachtig" },
+  { quote: "The man who moves a mountain begins by carrying away small stones.", author: "Confucius", tone: "krachtig" },
+  { quote: "Kracht groeit niet uit wat je kunt. Het groeit uit het overwinnen van wat je dacht dat je niet kon.", author: "", tone: "krachtig" },
+  { quote: "It does not matter how slowly you go as long as you do not stop.", author: "Confucius", tone: "krachtig" },
+
+  // Warm & menselijk
+  { quote: "Verzorg je lichaam — het is de enige plek waar je moet leven.", author: "Jim Rohn", tone: "warm" },
+  { quote: "Rust is geen beloning voor hard werken. Het is een voorwaarde ervoor.", author: "", tone: "warm" },
+  { quote: "Na de storm komt de stilte. En daarna: de wederopbouw.", author: "", tone: "warm" },
+  { quote: "Elke ochtend word je herboren. Wat je vandaag doet, telt het meest.", author: "Boeddha", tone: "warm" },
+  { quote: "Je kunt het verleden niet veranderen. Maar je kunt beslissen wie je morgen bent.", author: "", tone: "warm" },
+  { quote: "Jij bent niet wie je was. Je bent wie je kiest te zijn vandaag.", author: "", tone: "warm" },
+
+  // Poëtisch & stil
+  { quote: "Het is niet de last die je breekt, maar de manier waarop je hem draagt.", author: "Lou Holtz", tone: "poëtisch" },
+  { quote: "In the middle of difficulty lies opportunity.", author: "Albert Einstein", tone: "poëtisch" },
+  { quote: "Fall seven times, stand up eight.", author: "Japans gezegde", tone: "poëtisch" },
+  { quote: "The oak fought the wind and was broken. The willow bent when it must and survived.", author: "Robert Jordan", tone: "poëtisch" },
+
+  // Uitdagend & groei
+  { quote: "Elke dag is een nieuwe kans om opnieuw te beginnen.", author: "", tone: "uitdagend" },
+  { quote: "De beste tijd om te beginnen was gisteren. De op een na beste tijd is nu.", author: "", tone: "uitdagend" },
+  { quote: "Small daily improvements over time lead to stunning results.", author: "", tone: "uitdagend" },
+  { quote: "What you do every day matters more than what you do once in a while.", author: "Gretchen Rubin", tone: "uitdagend" },
+  { quote: "Je groeit niet in je comfortzone. Je groeit precies aan de rand ervan.", author: "", tone: "uitdagend" },
+
+  // Vrijmetselaars / symbolisch
+  { quote: "Rough ashlar becomes perfect ashlar through labor and dedication.", author: "Vrijmetselaars traditie", tone: "symbolisch" },
+  { quote: "As above, so below. As within, so without.", author: "Hermes Trismegistus", tone: "symbolisch" },
+];
+
+async function loadAIQuote(forceNew = false) {
+  const today_str = today();
+  const cached = localStorage.getItem('rml_quote_cache');
+
+  // Gebruik gecachte quote tenzij geforceerd vernieuwd
+  if (!forceNew && cached) {
+    try {
+      const c = JSON.parse(cached);
+      if (c.date === today_str) {
+        displayQuote(c.quote, c.author, c.tone, c.reflection);
+        return;
+      }
+    } catch(e) {}
   }
 
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  
-  body {
-    font-family: 'DM Sans', sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    min-height: 100vh;
-    font-size: 14px;
-    line-height: 1.5;
+  // Bereken welke quote op basis van dag — wisselt elke 3 dagen
+  const dayOfYear = Math.floor((new Date() - new Date(new Date().getFullYear(), 0, 0)) / 86400000);
+  const interval = Math.floor(dayOfYear / 3);
+  const baseIndex = interval % QUOTES_DB.length;
+
+  let index = baseIndex;
+  if (forceNew) {
+    // Kies een andere dan de huidige
+    const currentCached = localStorage.getItem('rml_quote_cache');
+    let currentQuote = '';
+    try { currentQuote = JSON.parse(currentCached).quote; } catch(e) {}
+    let tries = 0;
+    do {
+      index = Math.floor(Math.random() * QUOTES_DB.length);
+      tries++;
+    } while (QUOTES_DB[index].quote === currentQuote && tries < 10);
   }
 
-  h1, h2, h3 { font-family: 'DM Serif Display', serif; font-weight: 400; }
+  const selected = QUOTES_DB[index];
+  const reflections = {
+    'filosofisch': 'Neem even de tijd om hierover na te denken.',
+    'scherp': 'Eerlijk en direct — precies wat je soms nodig hebt.',
+    'krachtig': 'Jij beweegt, ook als het moeilijk is.',
+    'warm': 'Zorg goed voor jezelf — dat is geen luxe, dat is noodzaak.',
+    'poëtisch': 'Soms zit de waarheid in een beeld, niet in een uitleg.',
+    'uitdagend': 'Eén kleine stap vandaag is meer waard dan tien perfecte plannen.',
+    'symbolisch': 'Zoals de ruwe steen bewerkt wordt, zo ook jij.',
+  };
+  const reflection = reflections[selected.tone] || '';
 
-  /* NAV */
-  .nav {
-    position: fixed; top: 0; left: 0; right: 0; z-index: 50;
-    background: var(--surface);
-    border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 0 24px; height: 56px;
-  }
-  .nav-brand { font-family: 'DM Serif Display', serif; font-size: 18px; color: var(--text); letter-spacing: -0.02em; }
-  .nav-brand span { color: var(--accent); }
-  .nav-tabs { display: flex; gap: 2px; }
-  .nav-tab {
-    padding: 6px 14px; border-radius: 20px; font-size: 13px;
-    border: none; background: none; cursor: pointer; color: var(--text2);
-    transition: all 0.18s; font-family: 'DM Sans', sans-serif;
-  }
-  .nav-tab.active { background: var(--text); color: #fff; }
-  .nav-tab:hover:not(.active) { background: var(--surface2); color: var(--text); }
-  .nav-date { font-size: 12px; color: var(--text3); }
-  .nav-right { display: flex; align-items: center; gap: 10px; }
-  .nav-settings-btn { background: none; border: 1px solid var(--border); border-radius: 20px; padding: 5px 12px; font-size: 12px; color: var(--text2); cursor: pointer; font-family: 'DM Sans', sans-serif; }
-  .nav-settings-btn:hover { background: var(--surface2); color: var(--text); }
+  localStorage.setItem('rml_quote_cache', JSON.stringify({
+    date: today_str, quote: selected.quote, author: selected.author,
+    tone: selected.tone, reflection
+  }));
 
-  /* MAIN */
-  .main { padding: 72px 20px 40px; max-width: 1100px; margin: 0 auto; }
+  displayQuote(selected.quote, selected.author, selected.tone, reflection);
+}
 
-  /* PAGES */
-  .page { display: none; }
-  .page.active { display: block; }
-
-  /* HERO QUOTE */
-  .hero {
-    background: var(--text);
-    color: #fff;
-    border-radius: var(--radius);
-    padding: 24px 28px;
-    margin-bottom: 20px;
-    display: flex; align-items: center; justify-content: space-between; gap: 16px;
-  }
-  .hero-quote { flex: 1; }
-  .hero-label { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; opacity: 0.5; margin-bottom: 6px; }
-  .hero-text { font-family: 'DM Serif Display', serif; font-size: 17px; line-height: 1.45; opacity: 0.95; }
-  .hero-author { font-size: 12px; opacity: 0.45; margin-top: 6px; }
-  .hero-btn { background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.2); border-radius: 20px; padding: 7px 14px; font-size: 12px; color: #fff; cursor: pointer; white-space: nowrap; font-family: 'DM Sans', sans-serif; }
-  .hero-btn:hover { background: rgba(255,255,255,0.2); }
-
-  /* GRID */
-  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
-  .grid-sidebar { display: grid; grid-template-columns: 1fr 300px; gap: 16px; }
-  
-  @media (max-width: 720px) {
-    .grid-2, .grid-3, .grid-sidebar { grid-template-columns: 1fr; }
-    .nav-tabs { display: none; }
-    .mobile-nav { display: flex !important; }
-    .nav-date { display: none; }
-  }
-
-  /* CARD */
-  .card {
-    background: var(--surface);
-    border-radius: var(--radius);
-    border: 1px solid var(--border);
-    overflow: hidden;
-  }
-  .card-head {
-    padding: 14px 18px;
-    border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; justify-content: space-between;
-  }
-  .card-title { font-size: 14px; font-weight: 500; }
-  .card-body { padding: 16px 18px; }
-  .card-sub { font-size: 11px; color: var(--text3); margin-top: 2px; }
-
-  /* STAT CARDS */
-  .stats-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 18px; }
-  .stat-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 14px 16px;
-  }
-  .stat-label { font-size: 11px; color: var(--text3); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.06em; }
-  .stat-val { font-family: 'DM Serif Display', serif; font-size: 26px; color: var(--text); line-height: 1; }
-  .stat-hint { font-size: 11px; color: var(--text3); margin-top: 4px; }
-
-  @media (max-width: 720px) { .stats-row { grid-template-columns: 1fr 1fr; } }
-
-  /* INPUTS */
-  input[type="text"], input[type="number"], input[type="date"], input[type="time"], select, textarea {
-    width: 100%;
-    padding: 9px 12px;
-    border: 1px solid var(--border2);
-    border-radius: var(--radius-sm);
-    font-size: 13px;
-    background: var(--surface);
-    color: var(--text);
-    font-family: 'DM Sans', sans-serif;
-    outline: none;
-    transition: border-color 0.15s;
-  }
-  input:focus, select:focus, textarea:focus { border-color: var(--accent); }
-  textarea { resize: vertical; min-height: 72px; }
-  select { cursor: pointer; }
-
-  /* BUTTONS */
-  .btn {
-    padding: 9px 16px; border-radius: var(--radius-sm);
-    font-size: 13px; font-weight: 500; cursor: pointer;
-    border: none; font-family: 'DM Sans', sans-serif;
-    transition: all 0.15s; white-space: nowrap;
-  }
-  .btn-primary { background: var(--text); color: #fff; }
-  .btn-primary:hover { background: #333; }
-  .btn-accent { background: var(--accent); color: #fff; }
-  .btn-accent:hover { opacity: 0.88; }
-  .btn-ghost { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }
-  .btn-ghost:hover { color: var(--text); border-color: var(--border2); }
-  .btn-sm { padding: 5px 11px; font-size: 12px; }
-  .btn-danger { background: var(--red-light); color: var(--red); border: 1px solid rgba(139,32,32,0.15); }
-
-  /* ICON BUTTON */
-  .ibtn { background: none; border: none; cursor: pointer; color: var(--text3); padding: 3px 5px; border-radius: 5px; font-size: 15px; line-height: 1; }
-  .ibtn:hover { color: var(--text); background: var(--surface2); }
-
-  /* BADGES */
-  .badge { display: inline-block; font-size: 10px; font-weight: 500; padding: 2px 7px; border-radius: 20px; }
-  .badge-eiwit { background: #D4EDD4; color: #1A5C1A; }
-  .badge-gezond { background: #D4E8D4; color: #2A6B2A; }
-  .badge-sporten { background: var(--accent-light); color: var(--accent); }
-  .badge-sociaal { background: var(--blue-light); color: var(--blue); }
-  .badge-metime { background: var(--gold-light); color: var(--gold); }
-  .badge-ongezond { background: var(--red-light); color: var(--red); }
-  .badge-werk { background: #EDE8F5; color: #4A3270; }
-  .badge-Anders { background: var(--surface2); color: var(--text2); }
-
-  /* FORM ROW */
-  .form-row { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
-  .form-group { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 120px; }
-  .form-label { font-size: 11px; color: var(--text3); font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; }
-
-  /* ITEM LIST */
-  .item-list { display: flex; flex-direction: column; gap: 5px; max-height: 380px; overflow-y: auto; }
-  .item-list::-webkit-scrollbar { width: 4px; }
-  .item-list::-webkit-scrollbar-track { background: transparent; }
-  .item-list::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
-
-  .list-item {
-    display: flex; align-items: center; gap: 10px;
-    padding: 9px 12px; border-radius: var(--radius-sm);
-    border: 1px solid var(--border); background: var(--surface);
-    transition: all 0.15s;
-  }
-  .list-item:hover { border-color: var(--border2); }
-  .list-item.done { opacity: 0.45; }
-  .list-item.done .item-name { text-decoration: line-through; }
-  .item-check { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
-  .item-name { flex: 1; font-size: 13px; }
-  .item-meta { display: flex; gap: 5px; align-items: center; flex-shrink: 0; }
-  .item-store { font-size: 11px; color: var(--text3); background: var(--surface2); padding: 2px 7px; border-radius: 10px; }
-
-  /* SECTION DIVIDER */
-  .sec-div { font-size: 10px; font-weight: 500; color: var(--text3); text-transform: uppercase; letter-spacing: 0.08em; padding: 8px 0 4px; border-top: 1px solid var(--border); margin-top: 4px; }
-  .sec-div:first-child { border-top: none; margin-top: 0; padding-top: 0; }
-
-  /* SUGGESTIONS */
-  .sugg-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
-  .sugg-pill { font-size: 11px; padding: 4px 10px; border-radius: 20px; background: var(--surface2); border: 1px solid var(--border); cursor: pointer; color: var(--text2); transition: all 0.15s; }
-  .sugg-pill:hover { color: var(--text); border-color: var(--border2); background: var(--accent-light); }
-
-  /* PROGRESS */
-  .prog-bar-wrap { background: var(--surface2); border-radius: 4px; height: 5px; overflow: hidden; margin-top: 10px; }
-  .prog-bar { height: 5px; background: var(--accent); border-radius: 4px; transition: width 0.4s; }
-
-  /* FILTERS */
-  .filter-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
-  .filter-pill { font-size: 11px; padding: 4px 11px; border-radius: 20px; background: var(--surface2); border: 1px solid var(--border); cursor: pointer; color: var(--text2); }
-  .filter-pill.on { background: var(--text); color: #fff; border-color: var(--text); }
-
-  /* CALENDAR / AGENDA */
-  .agenda-day { margin-bottom: 16px; }
-  .agenda-day-head { font-size: 11px; font-weight: 500; color: var(--text3); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; padding-bottom: 5px; border-bottom: 1px solid var(--border); }
-  .agenda-event {
-    display: flex; align-items: center; gap: 10px;
-    padding: 9px 12px; border-radius: var(--radius-sm);
-    border: 1px solid var(--border); background: var(--surface);
-    margin-bottom: 5px; transition: all 0.15s;
-  }
-  .agenda-event:hover { border-color: var(--border2); }
-  .event-time { font-size: 12px; color: var(--text3); width: 52px; flex-shrink: 0; }
-  .event-name { flex: 1; font-size: 13px; }
-  .event-note { font-size: 11px; color: var(--text3); font-style: italic; }
-
-  /* HABITS */
-  .habit-row {
-    display: flex; align-items: center; gap: 10px;
-    padding: 10px 12px; border-radius: var(--radius-sm);
-    border: 1px solid var(--border); background: var(--surface);
-    margin-bottom: 5px;
-  }
-  .habit-dots { display: flex; gap: 4px; }
-  .habit-dot {
-    width: 22px; height: 22px; border-radius: 50%;
-    border: 1.5px solid var(--border2);
-    cursor: pointer; transition: all 0.15s;
-    display: flex; align-items: center; justify-content: center;
-    font-size: 10px; color: transparent;
-    background: var(--surface2);
-  }
-  .habit-dot.done { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .habit-dot.bad-done { background: var(--red); border-color: var(--red); color: #fff; }
-  .habit-dot:hover { border-color: var(--accent); }
-  .habit-name { flex: 1; font-size: 13px; }
-  .habit-streak { font-size: 11px; color: var(--gold); font-weight: 500; }
-
-  /* BUDGET */
-  .budget-entry { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; border-radius: var(--radius-sm); background: var(--surface2); margin-bottom: 5px; }
-  .budget-entry-left { font-size: 13px; color: var(--text); }
-  .budget-entry-right { font-size: 13px; font-weight: 500; }
-  .budget-entry-date { font-size: 11px; color: var(--text3); }
-  .budget-total-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; border-top: 1px solid var(--border); margin-top: 8px; font-weight: 500; }
-
-  .mobile-nav {
-    display: none;
-    position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
-    background: var(--surface); border-top: 1px solid var(--border);
-    padding: 6px 8px 18px;
-    gap: 2px; justify-content: space-around;
-  }
-  .mobile-nav-btn { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; background: none; border: none; cursor: pointer; padding: 4px 2px; border-radius: 8px; color: var(--text3); font-family: 'DM Sans', sans-serif; }
-  .mobile-nav-btn.active { color: var(--text); }
-  .mobile-nav-btn svg { width: 18px; height: 18px; }
-  .mobile-nav-label { font-size: 9px; }
-
-  /* MEER MENU */
-  .meer-menu { position: fixed; bottom: 72px; right: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; z-index: 60; box-shadow: var(--shadow-md); min-width: 170px; display: none; }
-  .meer-menu.open { display: block; }
-  .meer-menu-item { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border-radius: var(--radius-sm); font-size: 14px; cursor: pointer; color: var(--text); font-family: 'DM Sans', sans-serif; border: none; background: none; width: 100%; text-align: left; }
-  .meer-menu-item:hover { background: var(--surface2); }
-  .meer-menu-item.active { color: var(--accent); font-weight: 500; }
-  .meer-overlay { position: fixed; inset: 0; z-index: 55; display: none; }
-  .meer-overlay.open { display: block; }
-
-  /* MOBILE LIST OVERLAY */
-  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 100; display: none; align-items: center; justify-content: center; }
-  .overlay.open { display: flex; }
-  .modal { background: var(--surface); border-radius: var(--radius); padding: 22px; max-width: 340px; width: 92%; max-height: 85vh; overflow-y: auto; }
-  .modal h2 { font-size: 18px; margin-bottom: 4px; }
-  .modal-sub { font-size: 12px; color: var(--text3); margin-bottom: 16px; }
-
-  /* TABS inside card */
-  .inner-tabs { display: flex; gap: 2px; background: var(--surface2); border-radius: 8px; padding: 3px; }
-  .inner-tab { flex: 1; padding: 5px 10px; font-size: 12px; border: none; background: none; cursor: pointer; border-radius: 5px; color: var(--text2); font-family: 'DM Sans', sans-serif; text-align: center; transition: all 0.15s; }
-  .inner-tab.active { background: var(--surface); color: var(--text); font-weight: 500; border: 1px solid var(--border); }
-
-  /* WELLBEING RING */
-  .ring-wrap { display: flex; align-items: center; gap: 16px; }
-  .ring-svg { flex-shrink: 0; }
-  .ring-labels { display: flex; flex-direction: column; gap: 6px; }
-  .ring-label-row { display: flex; align-items: center; gap: 7px; font-size: 12px; }
-  .ring-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-
-  /* NOTES */
-  .note-card {
-    background: var(--gold-light);
-    border: 1px solid rgba(122,92,30,0.15);
-    border-radius: var(--radius-sm);
-    padding: 12px 14px;
-    margin-bottom: 8px;
-  }
-  .note-date { font-size: 11px; color: var(--gold); margin-bottom: 4px; }
-  .note-text { font-size: 13px; color: var(--text); line-height: 1.55; }
-
-  /* EMPTY */
-  .empty { padding: 24px; text-align: center; color: var(--text3); font-size: 13px; }
-
-  /* TOAST */
-  .toast { position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--text); color: #fff; padding: 10px 18px; border-radius: 20px; font-size: 13px; opacity: 0; transition: all 0.25s; z-index: 200; pointer-events: none; }
-  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-
-  .gap8 { gap: 8px; }
-  .mb12 { margin-bottom: 12px; }
-  .mb16 { margin-bottom: 16px; }
-  .mt12 { margin-top: 12px; }
-
-  /* TODO */
-  .todo-area-pills { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:14px; }
-  .todo-area-pill { padding:5px 14px; border-radius:20px; font-size:12px; border:1px solid var(--border); background:none; cursor:pointer; color:var(--text2); font-family:'DM Sans',sans-serif; transition:all 0.15s; }
-  .todo-area-pill.on { background:var(--text); color:#fff; border-color:var(--text); }
-  .todo-item {
-    display:flex; align-items:flex-start; gap:10px;
-    padding:11px 14px; border-radius:var(--radius-sm);
-    border:1px solid var(--border); background:var(--surface);
-    margin-bottom:6px; transition:border-color 0.15s;
-  }
-  .todo-item:hover { border-color:var(--border2); }
-  .todo-item.done { opacity:0.4; }
-  .todo-item.done .todo-title { text-decoration:line-through; }
-  .todo-item.prio-hoog { border-left:3px solid var(--red); }
-  .todo-item.prio-middel { border-left:3px solid var(--gold); }
-  .todo-item.prio-laag { border-left:3px solid var(--accent); }
-  .todo-circle {
-    width:20px; height:20px; border-radius:50%;
-    border:2px solid var(--border2); background:none;
-    cursor:pointer; flex-shrink:0; margin-top:1px;
-    display:flex; align-items:center; justify-content:center;
-    transition:all 0.15s; font-size:11px; color:transparent;
-  }
-  .todo-circle:hover { border-color:var(--accent); background:var(--accent-light); }
-  .todo-circle.checked { background:var(--accent); border-color:var(--accent); color:#fff; }
-  .todo-body { flex:1; min-width:0; }
-  .todo-title { font-size:13px; line-height:1.45; word-break:break-word; }
-  .todo-meta { display:flex; gap:6px; align-items:center; margin-top:4px; flex-wrap:wrap; }
-  .todo-note { font-size:11px; color:var(--text3); font-style:italic; margin-top:3px; line-height:1.4; }
-  .todo-due { font-size:11px; color:var(--text3); }
-  .todo-due.overdue { color:var(--red); font-weight:500; }
-  .todo-due.vandaag { color:var(--gold); font-weight:500; }
-  .todo-actions { display:flex; gap:2px; opacity:0; transition:opacity 0.15s; flex-shrink:0; margin-top:1px; }
-  .todo-item:hover .todo-actions { opacity:1; }
-  .todo-sec { font-size:10px; font-weight:500; color:var(--text3); text-transform:uppercase; letter-spacing:0.08em; padding:10px 0 4px; border-top:1px solid var(--border); margin-top:2px; }
-  .todo-sec:first-child { border-top:none; margin-top:0; padding-top:0; }
-  .prio-tag { display:inline-block; font-size:10px; padding:2px 6px; border-radius:10px; font-weight:500; }
-  .prio-tag.hoog { background:var(--red-light); color:var(--red); }
-  .prio-tag.middel { background:var(--gold-light); color:var(--gold); }
-  .prio-tag.laag { background:var(--accent-light); color:var(--accent); }
-  .focus-banner { background:var(--text); color:#fff; border-radius:var(--radius); padding:20px 24px; margin-bottom:16px; display:flex; align-items:center; justify-content:space-between; gap:16px; }
-  .focus-banner-left { flex:1; }
-  .focus-label { font-size:10px; letter-spacing:0.1em; text-transform:uppercase; opacity:0.45; margin-bottom:6px; }
-  .focus-title { font-family:'DM Serif Display',serif; font-size:18px; line-height:1.4; }
-  .focus-area { font-size:12px; opacity:0.5; margin-top:4px; }
-  .focus-done-btn { background:rgba(255,255,255,0.15); border:1px solid rgba(255,255,255,0.25); border-radius:var(--radius-sm); padding:9px 16px; color:#fff; font-size:12px; cursor:pointer; font-family:'DM Sans',sans-serif; white-space:nowrap; }
-  .focus-done-btn:hover { background:rgba(255,255,255,0.25); }
-  .todo-progress-ring { display:flex; align-items:center; gap:10px; }
-  .todo-stats-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px; }
-  .todo-stat { background:var(--surface2); border-radius:var(--radius-sm); padding:10px 12px; }
-  .todo-stat-val { font-family:'DM Serif Display',serif; font-size:22px; }
-  .todo-stat-label { font-size:11px; color:var(--text3); margin-top:2px; }
-
-  /* VOEDING */
-  .score-bar-wrap { height:10px; background:var(--surface2); border-radius:10px; overflow:hidden; margin:6px 0; }
-  .score-bar { height:10px; border-radius:10px; transition:width 0.6s ease; }
-  .score-1 { background:#C0392B; }
-  .score-2 { background:#E74C3C; }
-  .score-3 { background:#E67E22; }
-  .score-4 { background:#F39C12; }
-  .score-5 { background:#F1C40F; }
-  .score-6 { background:#D4AC0D; }
-  .score-7 { background:#82B340; }
-  .score-8 { background:#27AE60; }
-  .score-9 { background:#1E8449; }
-  .score-10 { background:#145A32; }
-  .score-label { font-size:11px; font-weight:500; }
-  .voeding-item { display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:var(--radius-sm); border:1px solid var(--border); background:var(--surface); margin-bottom:5px; }
-  .voeding-item-left { flex:1; min-width:0; }
-  .voeding-item-name { font-size:13px; font-weight:500; }
-  .voeding-item-meta { font-size:11px; color:var(--text3); margin-top:2px; }
-  .voeding-score-badge { width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:500; color:#fff; flex-shrink:0; }
-  .groep-dot { width:12px; height:12px; border-radius:50%; flex-shrink:0; }
-  .groep-row { display:flex; align-items:center; gap:8px; padding:6px 0; font-size:13px; border-bottom:1px solid var(--border); }
-  .groep-row:last-child { border-bottom:none; }
-  .portie-btn { padding:4px 10px; border-radius:20px; font-size:11px; border:1px solid var(--border); background:none; cursor:pointer; color:var(--text2); font-family:'DM Sans',sans-serif; }
-  .portie-btn.active { background:var(--text); color:#fff; border-color:var(--text); }
-  .avg-score-ring { width:80px; height:80px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-direction:column; border:4px solid var(--border2); flex-shrink:0; }
-  .avg-score-val { font-family:'DM Serif Display',serif; font-size:24px; line-height:1; }
-  .avg-score-label { font-size:10px; color:var(--text3); margin-top:2px; }
-  .ai-loading { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text3); padding:8px 0; }
-  .ai-loading-dot { width:6px; height:6px; border-radius:50%; background:var(--accent); animation:pulse 0.8s infinite; }
-  .ai-loading-dot:nth-child(2) { animation-delay:0.2s; }
-  .ai-loading-dot:nth-child(3) { animation-delay:0.4s; }
-  .quick-add-voeding { display:flex; gap:8px; margin-bottom:14px; }
-  .quick-add-voeding input { flex:1; }
-
-
-  @media (max-width: 720px) {
-    .main { padding: 72px 12px 90px; }
-    .hero { display: none; }
-    .stats-row { grid-template-columns: 1fr 1fr; }
-    .todo-actions { opacity:1; }
-  }
-  .auth-screen { position:fixed; inset:0; background:var(--bg); z-index:500; display:flex; align-items:center; justify-content:center; }
-  .auth-card { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:40px 36px; max-width:380px; width:90%; text-align:center; box-shadow:var(--shadow-md); }
-
-  /* USER BADGE */
-  .user-badge { display:flex; align-items:center; gap:8px; }
-  .user-avatar { width:28px; height:28px; border-radius:50%; border:1.5px solid var(--border2); object-fit:cover; }
-  .user-name { font-size:12px; color:var(--text2); max-width:100px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .signout-btn { font-size:11px; color:var(--text3); background:none; border:none; cursor:pointer; padding:2px 6px; border-radius:4px; font-family:'DM Sans',sans-serif; }
-  .signout-btn:hover { color:var(--red); background:var(--red-light); }
-</style>
-<body>
-
-<!-- FIREBASE -->
-<script type="module">
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js';
-import { getFirestore, doc, setDoc, getDoc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
-
-const firebaseConfig = {
-  apiKey: "AIzaSyABONOr0JQrC5y5UuktZmhAv_9xFk_z_kM",
-  authDomain: "rebuild-my-life.firebaseapp.com",
-  projectId: "rebuild-my-life",
-  storageBucket: "rebuild-my-life.firebasestorage.app",
-  messagingSenderId: "190378058705",
-  appId: "1:190378058705:web:ad6523b2dba1904edbf6f0"
-};
-
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-window._firestoreDb = db;
-
-let currentUser = null;
-let syncTimeout = null;
-let unsubscribeSnapshot = null;
-
-// ---- AUTH ----
-window.signInWithGoogle = async function() {
-  const btn = document.getElementById('auth-google-btn');
-  const err = document.getElementById('auth-error');
-  btn.disabled = true;
-  btn.innerHTML = '<span>Bezig met inloggen...</span>';
-  err.style.display = 'none';
-  try {
-    const provider = new GoogleAuthProvider();
-    await signInWithPopup(auth, provider);
-  } catch(e) {
-    console.error('Login error:', e);
-    err.textContent = 'Inloggen mislukt: ' + (e.message || 'Probeer opnieuw');
-    err.style.display = 'block';
-    btn.disabled = false;
-    btn.innerHTML = `<svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>Doorgaan met Google`;
-  }
-};
-
-window.signOutUser = async function() {
-  if (unsubscribeSnapshot) unsubscribeSnapshot();
-  await signOut(auth);
-};
-
-// ---- AUTH STATE ----
-onAuthStateChanged(auth, async (user) => {
-  if (user) {
-    currentUser = user;
-    window.currentUser = user;
-    document.getElementById('auth-screen').style.display = 'none';
-    document.getElementById('app-content').style.display = 'block';
-
-    // Update user badge in nav
-    const badge = document.getElementById('user-badge');
-    if (badge) {
-      badge.innerHTML = `
-        <img class="user-avatar" src="${user.photoURL || ''}" onerror="this.style.display='none'" />
-        <span class="user-name">${user.displayName?.split(' ')[0] || 'Twan'}</span>
-        <button class="signout-btn" onclick="signOutUser()">Uitloggen</button>
-      `;
-    }
-
-    // Load data from Firestore
-    await loadFromFirestore(user.uid);
-
-    // Listen for real-time changes from other devices
-    startRealtimeSync(user.uid);
-
-    // Init app
-    if (window.initApp) window.initApp();
-
+function displayQuote(quote, author, tone, reflection) {
+  document.getElementById('hero-text').textContent = quote;
+  const authorEl = document.getElementById('hero-author');
+  if (author && author !== 'eigen') {
+    authorEl.textContent = '— ' + author;
   } else {
-    currentUser = null;
-    document.getElementById('auth-screen').style.display = 'flex';
-    document.getElementById('app-content').style.display = 'none';
-    if (unsubscribeSnapshot) unsubscribeSnapshot();
+    authorEl.textContent = '';
   }
-});
-
-// ---- FIRESTORE SYNC ----
-async function loadFromFirestore(uid) {
-  setSyncStatus('syncing');
-  try {
-    const docRef = doc(db, 'users', uid, 'data', 'appdata');
-    const docSnap = await getDoc(docRef);
-    if (docSnap.exists()) {
-      const data = docSnap.data();
-      const keys = ['boodItems','boodNextId','boodFreq','boodWinkels','budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId','voedingItems','voedingNextId'];
-      keys.forEach(k => { if (data[k] !== undefined) window.S[k] = data[k]; });
-      if (data.qIdx !== undefined) window.S.qIdx = data.qIdx;
-    }
-    setSyncStatus('synced');
-  } catch(e) {
-    console.error('Load error:', e);
-    setSyncStatus('error');
-    if (window.load) window.load();
+  document.getElementById('hero-label').textContent = 'Dagelijkse quote · ' + (tone || '');
+  quoteReflection = reflection || '';
+  reflectionVisible = false;
+  document.getElementById('hero-reflection').style.display = 'none';
+  document.getElementById('hero-reflection').textContent = reflection || '';
+  if (reflection) {
+    document.getElementById('hero-reflect-btn').style.display = 'block';
+    document.getElementById('hero-reflect-btn').textContent = 'Waarom deze quote?';
   }
 }
 
-window.saveToFirestore = async function() {
-  if (!currentUser) return;
-  setSyncStatus('syncing');
-  try {
-    const keys = ['boodItems','boodNextId','boodFreq','boodWinkels','budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId','qIdx','voedingItems','voedingNextId'];
-    const data = { updatedAt: new Date().toISOString() };
-    keys.forEach(k => { data[k] = window.S[k]; });
-    const docRef = doc(db, 'users', currentUser.uid, 'data', 'appdata');
-    await setDoc(docRef, data, { merge: true });
-    setSyncStatus('synced');
-    if (window.save) window.save();
-  } catch(e) {
-    console.error('Save error:', e);
-    setSyncStatus('error');
-    if (window.save) window.save();
-  }
-};
+function toggleReflection() {
+  reflectionVisible = !reflectionVisible;
+  const el = document.getElementById('hero-reflection');
+  const btn = document.getElementById('hero-reflect-btn');
+  el.style.display = reflectionVisible ? 'block' : 'none';
+  btn.textContent = reflectionVisible ? 'Verberg' : 'Waarom deze quote?';
+}
 
-function startRealtimeSync(uid) {
-  if (unsubscribeSnapshot) unsubscribeSnapshot();
-  const docRef = doc(db, 'users', uid, 'data', 'appdata');
-  let lastSyncTs = 0;
-  unsubscribeSnapshot = onSnapshot(docRef, { includeMetadataChanges: false }, (docSnap) => {
-    if (docSnap.exists() && !docSnap.metadata.hasPendingWrites && !docSnap.metadata.fromCache) {
-      const data = docSnap.data();
-      const now = Date.now();
-      if (now - lastLocalWrite < 3000) return;
-      lastSyncTs = now;
-      const keys = ['boodItems','boodNextId','boodFreq','boodWinkels','budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId','voedingItems','voedingNextId'];
-      keys.forEach(k => { if (data[k] !== undefined) window.S[k] = data[k]; });
-      if (window._renderAll) window._renderAll();
-      setSyncStatus('synced');
-    }
-  }, (error) => {
-    console.error('Snapshot error:', error);
-    setSyncStatus('error');
+// Keep nextQuote for backward compat but redirect to AI
+function nextQuote() { loadAIQuote(true); }
+function renderQuote() { loadAIQuote(false); }
+
+
+// ---- BOODSCHAPPEN ----
+const EIWIT_CATS = ['Eiwitten'];
+const GEZOND_CATS = ['Groenten & Fruit', 'Eiwitten'];
+
+function getBadges(cat) {
+  let b = '';
+  if (EIWIT_CATS.includes(cat)) b += '<span class="badge badge-eiwit">Eiwitrijk</span> ';
+  if (GEZOND_CATS.includes(cat)) b += '<span class="badge badge-gezond">Gezond</span>';
+  return b;
+}
+
+function addBoodItem() {
+  const inp = document.getElementById('bood-input');
+  const name = inp.value.trim(); if (!name) return;
+  const storeRaw = document.getElementById('bood-store').value.trim() || '';
+
+  if (storeRaw && !S.boodWinkels.includes(storeRaw)) {
+    S.boodWinkels.push(storeRaw);
+  }
+
+  S.boodItems.push({ id: S.boodNextId++, name, store: storeRaw, checked: false, archived: false, added: today() });
+  S.boodFreq[name] = (S.boodFreq[name] || 0) + 1;
+  inp.value = '';
+  document.getElementById('bood-store').value = '';
+  debouncedSave(); renderAll(); toast('Toegevoegd: ' + name);
+}
+
+function renderWinkelDatalist() {
+  const dl = document.getElementById('winkel-opties');
+  if (!dl) return;
+  // Merge saved winkels with winkels already used on items
+  const fromItems = [...new Set(S.boodItems.map(i => i.store).filter(Boolean))];
+  const all = [...new Set([...S.boodWinkels, ...fromItems])].sort();
+  dl.innerHTML = all.map(w => `<option value="${w}">`).join('');
+}
+
+function toggleBood(id) {
+  const item = S.boodItems.find(i => i.id === id);
+  if (item) { item.checked = !item.checked; debouncedSave(); renderAll(); }
+}
+
+function archiveBood(id) {
+  const item = S.boodItems.find(i => i.id === id);
+  if (item) { item.archived = true; debouncedSave(); renderAll(); toast('Gearchiveerd'); }
+}
+
+function removeBood(id) {
+  S.boodItems = S.boodItems.filter(i => i.id !== id);
+  debouncedSave(); renderAll();
+}
+
+function clearBoodChecked() {
+  S.boodItems = S.boodItems.filter(i => !i.checked);
+  debouncedSave(); renderAll(); toast('Afgevinkte items gewist');
+}
+
+function setBoodFilter(f) {
+  S.boodFilter = f;
+  renderBoodList();
+}
+
+function boodMatches(item) {
+  if (S.boodFilter === 'alle') return true;
+  return (item.store || '').toLowerCase() === S.boodFilter.toLowerCase();
+}
+
+function quickAddBood(name) {
+  const prev = S.boodItems.find(i => i.name === name);
+  const store = prev ? prev.store : '';
+  S.boodItems.push({ id: S.boodNextId++, name, store, checked: false, archived: false, added: today() });
+  S.boodFreq[name] = (S.boodFreq[name] || 0) + 1;
+  debouncedSave(); renderAll(); toast('Snel toegevoegd: ' + name);
+}
+
+function renderBoodList() {
+  const list = document.getElementById('bood-list');
+  if (!list) return;
+
+  // Update datalist with known stores
+  renderWinkelDatalist();
+
+  // Update filter pills dynamically based on known stores
+  const filterRow = document.getElementById('bood-filters');
+  if (filterRow) {
+    const fromItems = [...new Set(S.boodItems.map(i => i.store).filter(Boolean))];
+    const winkels = [...new Set([...S.boodWinkels, ...fromItems])].sort();
+    const currentFilter = S.boodFilter;
+    filterRow.innerHTML = `
+      <span style="font-size:11px;color:var(--text3);">Filter:</span>
+      <button class="filter-pill ${currentFilter==='alle'?'on':''}" onclick="setBoodFilter('alle')">Alle</button>
+      ${winkels.map(w => `<button class="filter-pill ${currentFilter===w?'on':''}" onclick="setBoodFilter('${w.replace(/'/g,"\\'")}'">${w}</button>`).join('')}
+    `;
+  }
+
+  const visible = S.boodItems.filter(i => !i.archived && boodMatches(i));
+
+  // Suggestions: producten die je eerder kocht maar nog niet op de lijst staan
+  const currentNames = S.boodItems.filter(i=>!i.archived).map(i=>i.name);
+  const top = Object.entries(S.boodFreq).sort((a,b)=>b[1]-a[1]).slice(0,8).map(e=>e[0]).filter(n=>!currentNames.includes(n));
+  const suggRow = document.getElementById('bood-sugg-row');
+  if (suggRow) {
+    suggRow.innerHTML = top.length
+      ? '<span style="font-size:11px;color:var(--text3);margin-right:4px;">Vaak:</span>' + top.slice(0,6).map(n=>`<span class="sugg-pill" onclick="quickAddBood('${n.replace(/'/g,"\\'")}'">${n}</span>`).join('')
+      : '';
+  }
+
+  if (!visible.length) {
+    list.innerHTML = '<div class="empty">Geen items. Voeg hierboven iets toe.</div>';
+    document.getElementById('bood-prog-wrap').style.display = 'none';
+    document.getElementById('bood-prog-label').textContent = '';
+    return;
+  }
+
+  // Groepeer op winkel
+  const withStore = visible.filter(i => i.store);
+  const withoutStore = visible.filter(i => !i.store);
+  const groups = {};
+  withStore.forEach(item => {
+    if (!groups[item.store]) groups[item.store] = [];
+    groups[item.store].push(item);
   });
+
+  let html = '';
+  Object.keys(groups).sort().forEach(grp => {
+    html += `<div class="sec-div">${grp}</div>`;
+    groups[grp].forEach(item => {
+      html += `<div class="list-item${item.checked?' done':''}">
+        <input type="checkbox" class="item-check" ${item.checked?'checked':''} onchange="toggleBood(${item.id})" />
+        <span class="item-name">${item.name}</span>
+        <div class="item-meta">
+          ${item.store ? `<span class="item-store">${item.store}</span>` : ''}
+          <button class="ibtn" onclick="removeBood(${item.id})" title="Verwijder">×</button>
+        </div>
+      </div>`;
+    });
+  });
+
+  if (withoutStore.length) {
+    if (Object.keys(groups).length) html += `<div class="sec-div">Geen winkel</div>`;
+    withoutStore.forEach(item => {
+      html += `<div class="list-item${item.checked?' done':''}">
+        <input type="checkbox" class="item-check" ${item.checked?'checked':''} onchange="toggleBood(${item.id})" />
+        <span class="item-name">${item.name}</span>
+        <div class="item-meta">
+          <button class="ibtn" onclick="removeBood(${item.id})" title="Verwijder">×</button>
+        </div>
+      </div>`;
+    });
+  }
+
+  list.innerHTML = html;
+
+  const total = visible.length, done = visible.filter(i=>i.checked).length, pct = total ? Math.round(done/total*100) : 0;
+  document.getElementById('bood-prog-label').textContent = `${done} van ${total} afgevinkt (${pct}%)`;
+  document.getElementById('bood-prog-wrap').style.display = total ? 'block' : 'none';
+  document.getElementById('bood-prog-bar').style.width = pct + '%';
 }
 
-let lastLocalWrite = 0;
-
-function setSyncStatus(status) {
-  const dot = document.getElementById('sync-dot');
-  const label = document.getElementById('sync-label');
-  if (!dot || !label) return;
-  dot.className = 'sync-dot' + (status === 'syncing' ? ' syncing' : status === 'error' ? ' error' : '');
-  label.textContent = status === 'syncing' ? 'Synchroniseren...' : status === 'error' ? 'Sync fout' : 'Gesynchroniseerd';
+// ---- BUDGET ----
+function addBudget() {
+  const store = document.getElementById('budget-store').value.trim() || 'Winkel';
+  const amount = parseFloat(document.getElementById('budget-amount').value);
+  if (!amount || amount <= 0) return;
+  S.budgetEntries.push({ store, amount, date: today() });
+  document.getElementById('budget-store').value = '';
+  document.getElementById('budget-amount').value = '';
+  debouncedSave(); renderBudget(); toast('Budget opgeslagen');
 }
 
-// Debounced save — wacht 1.5s na laatste wijziging
-window.debouncedSave = function() {
-  lastLocalWrite = Date.now();
-  if (window.save) window.save(); // localStorage direct
-  clearTimeout(syncTimeout);
-  syncTimeout = setTimeout(() => { window.saveToFirestore(); }, 1500);
-};
-
-</script>
-
-<!-- AUTH SCREEN -->
-<div id="auth-screen" style="position:fixed;inset:0;background:var(--bg);z-index:500;display:flex;align-items:center;justify-content:center;">
-  <div class="auth-card">
-    <div class="auth-logo">Rebuild <span>My Life</span></div>
-    <p class="auth-sub">Jouw persoonlijke dashboard.<br>Log in om verder te gaan waar je gebleven was — op elk apparaat.</p>
-
-    <div id="auth-local-warning" style="background:var(--gold-light);border:1px solid rgba(122,92,30,0.2);border-radius:var(--radius-sm);padding:12px 14px;margin-bottom:16px;font-size:12px;color:var(--gold);line-height:1.6;display:none;">
-      <strong>Lokaal bestand gedetecteerd</strong><br>
-      Firebase login werkt niet als je het bestand direct opent via <code>file://</code>. 
-      Zie de instructies hieronder om dit op te lossen.
-    </div>
-
-    <button class="auth-google-btn" id="auth-google-btn" onclick="signInWithGoogle()">
-      <svg viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-      Doorgaan met Google
-    </button>
-    <div class="auth-error" id="auth-error"></div>
-
-  </div>
-</div>
-
-<!-- APP CONTENT (hidden until logged in) -->
-<div id="app-content" style="display:none;">
-
-<nav class="nav">
-  <div class="nav-brand">Rebuild <span>My Life</span></div>
-  <div class="nav-tabs" id="nav-tabs">
-    <button class="nav-tab active" onclick="showPage('dashboard')">Dashboard</button>
-    <button class="nav-tab" onclick="showPage('boodschappen')">Boodschappen</button>
-    <button class="nav-tab" onclick="showPage('todo')">To-do</button>
-    <button class="nav-tab" onclick="showPage('agenda')">Agenda</button>
-    <button class="nav-tab" onclick="showPage('gewoonten')">Gewoonten</button>
-    <button class="nav-tab" onclick="showPage('voeding')">Voeding</button>
-    <button class="nav-tab" onclick="showPage('recepten')">Recepten</button>
-  </div>
-  <div class="nav-right">
-    <div class="sync-status"><span class="sync-dot" id="sync-dot"></span><span id="sync-label"></span></div>
-    <div class="nav-date" id="nav-date"></div>
-    <div class="user-badge" id="user-badge"></div>
-    <button class="nav-settings-btn" onclick="openSettings()">⚙ Data</button>
-  </div>
-</nav>
-
-<div class="mobile-nav" id="mobile-nav">
-  <button class="mobile-nav-btn" id="mnav-dashboard" onclick="showPage('dashboard')">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
-    <span class="mobile-nav-label">Dashboard</span>
-  </button>
-  <button class="mobile-nav-btn" id="mnav-boodschappen" onclick="showPage('boodschappen')">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2L3 6v14a2 2 0 002 2h14a2 2 0 002-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 01-8 0"/></svg>
-    <span class="mobile-nav-label">Boodschappen</span>
-  </button>
-  <button class="mobile-nav-btn" id="mnav-voeding" onclick="showPage('voeding')">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2a7 7 0 017 7c0 4-3 6-3 9H8c0-3-3-5-3-9a7 7 0 017-7z"/><line x1="8" y1="22" x2="16" y2="22"/><line x1="12" y1="18" x2="12" y2="22"/></svg>
-    <span class="mobile-nav-label">Voeding</span>
-  </button>
-  <button class="mobile-nav-btn" id="mnav-agenda" onclick="showPage('agenda')">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-    <span class="mobile-nav-label">Agenda</span>
-  </button>
-  <button class="mobile-nav-btn" id="mnav-meer" onclick="toggleMeerMenu()">
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
-    <span class="mobile-nav-label">Meer</span>
-  </button>
-</div>
-
-<!-- MEER MENU -->
-<div class="meer-overlay" id="meer-overlay" onclick="closeMeerMenu()"></div>
-<div class="meer-menu" id="meer-menu">
-  <button class="meer-menu-item" id="mmitem-gewoonten" onclick="showPageFromMeer('gewoonten')">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-    Gewoonten
-  </button>
-  <button class="meer-menu-item" id="mmitem-todo" onclick="showPageFromMeer('todo')">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>
-    To-do
-  </button>
-  <button class="meer-menu-item" id="mmitem-recepten" onclick="showPageFromMeer('recepten')">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 2h18v20H3z"/><line x1="7" y1="8" x2="17" y2="8"/><line x1="7" y1="12" x2="17" y2="12"/><line x1="7" y1="16" x2="13" y2="16"/></svg>
-    Recepten
-  </button>
-</div>
-
-<div class="main">
-
-<!-- DASHBOARD -->
-<div class="page active" id="page-dashboard">
-  <div class="hero" id="hero">
-    <div class="hero-quote" style="flex:1;">
-      <div class="hero-label" id="hero-label">Dagelijkse quote</div>
-      <div class="hero-text" id="hero-text" style="font-size:19px;min-height:28px;">
-        <span class="hero-loading" id="hero-loading" style="opacity:0.4;font-style:italic;font-size:15px;">Laden...</span>
-      </div>
-      <div class="hero-author" id="hero-author"></div>
-      <div id="hero-reflection" style="margin-top:10px;font-size:12px;opacity:0.5;line-height:1.6;display:none;font-style:italic;"></div>
-    </div>
-    <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end;flex-shrink:0;">
-      <button class="hero-btn" onclick="loadAIQuote(true)" id="hero-refresh-btn">Nieuwe quote</button>
-      <button class="hero-btn" id="hero-reflect-btn" onclick="toggleReflection()" style="opacity:0.6;font-size:11px;display:none;">Toon reflectie</button>
-    </div>
-  </div>
-
-  <div class="stats-row" id="dash-stats">
-    <div class="stat-card">
-      <div class="stat-label">Boodschappen</div>
-      <div class="stat-val" id="ds-bood">0</div>
-      <div class="stat-hint">items vandaag</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Afspraken</div>
-      <div class="stat-val" id="ds-agenda">0</div>
-      <div class="stat-hint">deze week</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Gewoonten</div>
-      <div class="stat-val" id="ds-habits">0%</div>
-      <div class="stat-hint">score vandaag</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">Budget</div>
-      <div class="stat-val" id="ds-budget">€0</div>
-      <div class="stat-hint">deze week</div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">To-do</div>
-      <div class="stat-val" id="ds-todo">0</div>
-      <div class="stat-hint">open taken</div>
-    </div>
-  </div>
-
-  <div class="grid-sidebar">
-    <div style="display:flex;flex-direction:column;gap:16px;">
-      <div class="card">
-        <div class="card-head">
-          <div><div class="card-title">Agenda vandaag</div></div>
-          <button class="btn btn-ghost btn-sm" onclick="showPage('agenda')">Alles zien</button>
-        </div>
-        <div class="card-body" id="dash-agenda-list">
-          <div class="empty">Geen afspraken vandaag</div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-head">
-          <div><div class="card-title">Boodschappen nog te halen</div></div>
-          <button class="btn btn-ghost btn-sm" onclick="showPage('boodschappen')">Lijst openen</button>
-        </div>
-        <div class="card-body" id="dash-bood-list">
-          <div class="empty">Lijst is leeg</div>
-        </div>
-        <div id="dash-prog-wrap" style="padding:0 18px 14px;display:none;">
-          <div class="prog-bar-wrap"><div class="prog-bar" id="dash-prog-bar"></div></div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-head">
-          <div><div class="card-title">To-do vandaag</div></div>
-          <button class="btn btn-ghost btn-sm" onclick="showPage('todo')">Alles zien</button>
-        </div>
-        <div class="card-body" id="dash-todo-list">
-          <div class="empty">Geen open taken</div>
-        </div>
-      </div>
-    </div>
-
-    <div style="display:flex;flex-direction:column;gap:16px;">
-      <div class="card">
-        <div class="card-head"><div class="card-title">Gewoonten vandaag</div></div>
-        <div class="card-body" id="dash-habits-list">
-          <div class="empty">Geen gewoonten ingesteld</div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-head"><div class="card-title">Notities</div></div>
-        <div class="card-body">
-          <textarea id="dash-note-input" placeholder="Hoe voel je je vandaag? Schrijf even..." style="margin-bottom:8px;"></textarea>
-          <button class="btn btn-accent" style="width:100%;" onclick="saveNote()">Opslaan</button>
-          <div id="dash-notes-list" style="margin-top:12px;max-height:160px;overflow-y:auto;"></div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-head"><div class="card-title">Mobiele Lijst</div></div>
-        <div class="card-body">
-          <p style="font-size:12px;color:var(--text2);margin-bottom:10px;line-height:1.6;">Compacte lijst van openstaande boodschappen voor in de winkel.</p>
-          <button class="btn btn-ghost" style="width:100%;" onclick="openMobile()">Toon mobiele lijst</button>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- BOODSCHAPPEN -->
-<div class="page" id="page-boodschappen">
-  <div class="grid-sidebar">
-    <div class="card">
-      <div class="card-head">
-        <div><div class="card-title">Boodschappenlijst</div></div>
-      </div>
-      <div class="card-body">
-        <div class="form-row mb12">
-          <div class="form-group" style="flex:3;min-width:160px;">
-            <input type="text" id="bood-input" placeholder="Product toevoegen..." onkeydown="if(event.key==='Enter')addBoodItem()" />
-          </div>
-          <div class="form-group" style="position:relative;flex:2;">
-            <input type="text" id="bood-store" placeholder="Winkel..." list="winkel-opties" autocomplete="off" />
-            <datalist id="winkel-opties"></datalist>
-          </div>
-          <button class="btn btn-primary" onclick="addBoodItem()">+ Voeg toe</button>
-        </div>
-
-        <div id="bood-sugg-wrap">
-          <div class="sugg-row" id="bood-sugg-row"></div>
-        </div>
-
-        <div class="filter-row" id="bood-filters">
-          <span style="font-size:11px;color:var(--text3);">Filter:</span>
-          <button class="filter-pill on" onclick="setBoodFilter('alle')">Alle</button>
-          <button class="filter-pill" onclick="setBoodFilter('supermarkt')">Supermarkt</button>
-          <button class="filter-pill" onclick="setBoodFilter('markt')">Markt</button>
-          <button class="filter-pill" onclick="setBoodFilter('eiwitrijk')">Eiwitrijk</button>
-        </div>
-
-        <div class="item-list" id="bood-list"></div>
-
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;">
-          <span style="font-size:11px;color:var(--text3);" id="bood-prog-label"></span>
-          <button onclick="clearBoodChecked()" style="font-size:11px;color:var(--text3);background:none;border:none;cursor:pointer;">Afgevinkte wissen</button>
-        </div>
-        <div class="prog-bar-wrap" id="bood-prog-wrap" style="display:none;margin-top:6px;">
-          <div class="prog-bar" id="bood-prog-bar"></div>
-        </div>
-      </div>
-    </div>
-
-    <div style="display:flex;flex-direction:column;gap:16px;">
-      <div class="card">
-        <div class="card-head"><div class="card-title">Budget Tracker</div></div>
-        <div class="card-body">
-          <div class="form-group mb12">
-            <input type="text" id="budget-store" placeholder="Winkel..." />
-          </div>
-          <div class="form-row mb12">
-            <input type="number" id="budget-amount" placeholder="€ Bedrag" step="0.01" min="0" />
-            <button class="btn btn-ghost" onclick="addBudget()">Toevoegen</button>
-          </div>
-          <div id="budget-list"></div>
-          <div id="budget-total-row" style="display:none;" class="budget-total-row">
-            <span style="font-size:13px;color:var(--text2);">Totaal deze week</span>
-            <span id="budget-total-val" style="font-size:15px;">€ 0,00</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- AGENDA -->
-<div class="page" id="page-agenda">
-  <div class="grid-sidebar">
-    <div class="card">
-      <div class="card-head"><div class="card-title">Afspraken & Activiteiten</div></div>
-      <div class="card-body">
-        <div class="form-row mb12 gap8" style="flex-wrap:wrap;">
-          <div class="form-group" style="flex:2;min-width:160px;">
-            <div class="form-label">Activiteit</div>
-            <input type="text" id="ag-name" placeholder="Bijv. Sporten, Koffie met vriend..." />
-          </div>
-          <div class="form-group">
-            <div class="form-label">Type</div>
-            <select id="ag-type">
-              <option value="sporten">Sporten</option>
-              <option value="sociaal">Sociaal</option>
-              <option value="metime">Me-time</option>
-              <option value="werk">Werk/Zakelijk</option>
-              <option value="Anders">Anders</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <div class="form-label">Datum</div>
-            <input type="date" id="ag-date" />
-          </div>
-          <div class="form-group">
-            <div class="form-label">Tijd</div>
-            <input type="time" id="ag-time" />
-          </div>
-          <div class="form-group" style="flex:2;min-width:140px;">
-            <div class="form-label">Notitie (optioneel)</div>
-            <input type="text" id="ag-note" placeholder="Bijv. locatie, met wie..." />
-          </div>
-          <div style="display:flex;align-items:flex-end;">
-            <button class="btn btn-primary" onclick="addAgendaItem()">+ Toevoegen</button>
-          </div>
-        </div>
-
-        <div class="filter-row">
-          <button class="filter-pill on" onclick="setAgFilter('alle')">Alle</button>
-          <button class="filter-pill" onclick="setAgFilter('sporten')">Sporten</button>
-          <button class="filter-pill" onclick="setAgFilter('sociaal')">Sociaal</button>
-          <button class="filter-pill" onclick="setAgFilter('metime')">Me-time</button>
-          <button class="filter-pill" onclick="setAgFilter('werk')">Werk</button>
-        </div>
-
-        <div id="agenda-list" style="max-height:480px;overflow-y:auto;"></div>
-      </div>
-    </div>
-
-    <div style="display:flex;flex-direction:column;gap:16px;">
-      <div class="card">
-        <div class="card-head"><div class="card-title">Deze week</div></div>
-        <div class="card-body">
-          <div id="week-summary" style="display:flex;flex-direction:column;gap:8px;"></div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-head"><div class="card-title">Balans</div></div>
-        <div class="card-body" id="balans-card">
-          <p style="font-size:12px;color:var(--text2);line-height:1.6;">Verdeling van je activiteiten helpt je balans te zien tussen sporten, sociaal contact en me-time.</p>
-          <div id="balans-bars" style="margin-top:12px;display:flex;flex-direction:column;gap:8px;"></div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- GEWOONTEN -->
-<div class="page" id="page-gewoonten">
-  <div class="grid-sidebar">
-    <div class="card">
-      <div class="card-head">
-        <div><div class="card-title">Gewoonten Tracker</div><div class="card-sub">Eerlijk overzicht — gezond én ongezond</div></div>
-        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('add-habit-wrap').style.display=document.getElementById('add-habit-wrap').style.display==='none'?'block':'none'">+ Gewoonte</button>
-      </div>
-      <div class="card-body">
-        <div id="add-habit-wrap" style="display:none;background:var(--surface2);border-radius:var(--radius-sm);padding:14px;margin-bottom:14px;">
-          <div class="form-row gap8">
-            <div class="form-group" style="flex:2;">
-              <div class="form-label">Naam gewoonte</div>
-              <input type="text" id="habit-name-input" placeholder="Bijv. Sporten, Alcohol, Roken..." />
-            </div>
-            <div class="form-group">
-              <div class="form-label">Type</div>
-              <select id="habit-type">
-                <option value="goed">Gezond (opbouwen)</option>
-                <option value="slecht">Ongezond (minderen)</option>
-              </select>
-            </div>
-            <div style="display:flex;align-items:flex-end;">
-              <button class="btn btn-primary" onclick="addHabit()">Toevoegen</button>
-            </div>
-          </div>
-        </div>
-
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">
-          <span style="font-size:12px;color:var(--text3);">Week van</span>
-          <input type="date" id="habit-week-input" onchange="renderHabits()" style="width:auto;" />
-        </div>
-
-        <div id="habits-good-section">
-          <div class="sec-div">Gezonde gewoonten opbouwen</div>
-          <div id="habits-good-list"></div>
-        </div>
-        <div id="habits-bad-section" style="margin-top:8px;">
-          <div class="sec-div">Ongezonde gewoonten minderen</div>
-          <div id="habits-bad-list"></div>
-        </div>
-      </div>
-    </div>
-
-    <div style="display:flex;flex-direction:column;gap:16px;">
-      <div class="card">
-        <div class="card-head"><div class="card-title">Voortgang</div></div>
-        <div class="card-body" id="habit-progress-card">
-          <div class="empty">Nog geen gewoonten</div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-head"><div class="card-title">Reflectie</div></div>
-        <div class="card-body">
-          <p style="font-size:12px;color:var(--text2);line-height:1.6;margin-bottom:10px;">Wat merk je op in je gewoonten deze week? Wat wil je volgende week anders doen?</p>
-          <textarea id="reflect-input" placeholder="Schrijf hier je reflectie..." style="margin-bottom:8px;"></textarea>
-          <button class="btn btn-accent" style="width:100%;" onclick="saveReflection()">Opslaan</button>
-          <div id="reflect-list" style="margin-top:12px;max-height:180px;overflow-y:auto;"></div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- TODO -->
-<div class="page" id="page-todo">
-  <div id="todo-focus-wrap"></div>
-
-  <div class="grid-sidebar">
-    <div class="card">
-      <div class="card-head">
-        <div><div class="card-title">To-do lijst</div><div class="card-sub" id="todo-sub">0 open taken</div></div>
-        <button class="btn btn-ghost btn-sm" onclick="toggleTodoForm()">+ Nieuwe taak</button>
-      </div>
-      <div class="card-body">
-
-        <!-- ADD FORM -->
-        <div id="todo-form-wrap" style="display:none;background:var(--surface2);border-radius:var(--radius-sm);padding:14px;margin-bottom:14px;">
-          <div class="form-row gap8" style="margin-bottom:8px;">
-            <div class="form-group" style="flex:3;min-width:160px;">
-              <div class="form-label">Taak</div>
-              <input type="text" id="todo-input" placeholder="Wat moet je doen?" onkeydown="if(event.key==='Enter')addTodo()" />
-            </div>
-            <div class="form-group">
-              <div class="form-label">Gebied</div>
-              <select id="todo-area">
-                <option value="Persoonlijk">Persoonlijk</option>
-                <option value="Gezondheid">Gezondheid</option>
-                <option value="Financiën">Financiën</option>
-                <option value="Sociaal">Sociaal</option>
-                <option value="Praktisch">Praktisch</option>
-                <option value="Werk">Werk</option>
-                <option value="Rebuild">Rebuild</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <div class="form-label">Prioriteit</div>
-              <select id="todo-prio">
-                <option value="middel">Middel</option>
-                <option value="hoog">Hoog</option>
-                <option value="laag">Laag</option>
-                <option value="geen">Geen</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <div class="form-label">Deadline</div>
-              <input type="date" id="todo-due" />
-            </div>
-          </div>
-          <div class="form-group" style="margin-bottom:10px;">
-            <div class="form-label">Notitie (optioneel)</div>
-            <input type="text" id="todo-note-input" placeholder="Extra context, details..." />
-          </div>
-          <div style="display:flex;gap:8px;">
-            <button class="btn btn-primary" onclick="addTodo()">Toevoegen</button>
-            <button class="btn btn-ghost" onclick="toggleTodoForm()">Annuleren</button>
-          </div>
-        </div>
-
-        <!-- FILTERS -->
-        <div class="todo-area-pills" id="todo-filter-pills">
-          <button class="todo-area-pill on" onclick="setTodoFilter('alle')">Alle</button>
-          <button class="todo-area-pill" onclick="setTodoFilter('Persoonlijk')">Persoonlijk</button>
-          <button class="todo-area-pill" onclick="setTodoFilter('Gezondheid')">Gezondheid</button>
-          <button class="todo-area-pill" onclick="setTodoFilter('Financiën')">Financiën</button>
-          <button class="todo-area-pill" onclick="setTodoFilter('Sociaal')">Sociaal</button>
-          <button class="todo-area-pill" onclick="setTodoFilter('Praktisch')">Praktisch</button>
-          <button class="todo-area-pill" onclick="setTodoFilter('Rebuild')">Rebuild</button>
-        </div>
-
-        <!-- SORT -->
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-          <span style="font-size:11px;color:var(--text3);">Sorteren op:</span>
-          <div style="display:flex;gap:6px;">
-            <button class="filter-pill on" id="sort-prio-btn" onclick="setTodoSort('prio')">Prioriteit</button>
-            <button class="filter-pill" id="sort-due-btn" onclick="setTodoSort('due')">Deadline</button>
-            <button class="filter-pill" id="sort-area-btn" onclick="setTodoSort('area')">Gebied</button>
-          </div>
-        </div>
-
-        <div class="item-list" id="todo-list" style="max-height:480px;"></div>
-
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;">
-          <span style="font-size:11px;color:var(--text3);" id="todo-prog-label"></span>
-          <button onclick="clearDoneTodos()" style="font-size:11px;color:var(--text3);background:none;border:none;cursor:pointer;">Voltooide verwijderen</button>
-        </div>
-        <div class="prog-bar-wrap" id="todo-prog-wrap" style="margin-top:6px;display:none;">
-          <div class="prog-bar" id="todo-prog-bar"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- SIDEBAR -->
-    <div style="display:flex;flex-direction:column;gap:16px;">
-
-      <div class="card">
-        <div class="card-head"><div class="card-title">Focus — nu doen</div></div>
-        <div class="card-body" id="todo-next-task">
-          <div class="empty">Geen open taken</div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-head"><div class="card-title">Statistieken</div></div>
-        <div class="card-body">
-          <div class="todo-stats-grid">
-            <div class="todo-stat"><div class="todo-stat-val" id="ts-open">0</div><div class="todo-stat-label">Open</div></div>
-            <div class="todo-stat"><div class="todo-stat-val" id="ts-done">0</div><div class="todo-stat-label">Voltooid</div></div>
-            <div class="todo-stat"><div class="todo-stat-val" id="ts-today">0</div><div class="todo-stat-label">Vandaag</div></div>
-            <div class="todo-stat"><div class="todo-stat-val" id="ts-overdue" style="color:var(--red);">0</div><div class="todo-stat-label">Te laat</div></div>
-          </div>
-          <div class="prog-bar-wrap" style="margin-top:4px;">
-            <div class="prog-bar" id="todo-stats-bar"></div>
-          </div>
-          <div style="font-size:11px;color:var(--text3);margin-top:6px;text-align:right;" id="todo-pct-label"></div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-head"><div class="card-title">Per gebied</div></div>
-        <div class="card-body" id="todo-area-stats" style="display:flex;flex-direction:column;gap:7px;"></div>
-      </div>
-
-    </div>
-  </div>
-</div>
-
-<!-- VOEDING -->
-<div class="page" id="page-voeding">
-  <div class="grid-sidebar">
-    <div style="display:flex;flex-direction:column;gap:16px;">
-
-      <!-- INVOER -->
-      <div class="card">
-        <div class="card-head">
-          <div><div class="card-title">Wat heb je gegeten of gedronken?</div><div class="card-sub">Typ vrij — AI analyseert automatisch</div></div>
-        </div>
-        <div class="card-body">
-          <div class="quick-add-voeding">
-            <input type="text" id="voeding-input" placeholder="Bijv. Big Mac menu, groene smoothie, glas cola, kipfilet met rijst..." onkeydown="if(event.key==='Enter')addVoedingItem()" />
-            <button class="btn btn-primary" onclick="addVoedingItem()" id="voeding-add-btn">Analyseer</button>
-          </div>
-
-          <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">
-            <span style="font-size:11px;color:var(--text3);">Portie:</span>
-            <button class="portie-btn" onclick="setPortie('klein')">Klein</button>
-            <button class="portie-btn active" id="portie-normaal" onclick="setPortie('normaal')">Normaal</button>
-            <button class="portie-btn" onclick="setPortie('groot')">Groot</button>
-            <span style="font-size:11px;color:var(--text3);margin-left:8px;">Moment:</span>
-            <button class="portie-btn" onclick="setMoment('ontbijt')">Ontbijt</button>
-            <button class="portie-btn active" id="moment-lunch" onclick="setMoment('lunch')">Lunch</button>
-            <button class="portie-btn" onclick="setMoment('diner')">Diner</button>
-            <button class="portie-btn" onclick="setMoment('snack')">Snack</button>
-            <button class="portie-btn" onclick="setMoment('onderweg')">Onderweg</button>
-          </div>
-
-          <div id="voeding-ai-loading" style="display:none;" class="ai-loading">
-            <div class="ai-loading-dot"></div>
-            <div class="ai-loading-dot"></div>
-            <div class="ai-loading-dot"></div>
-            <span>AI analyseert...</span>
-          </div>
-
-          <!-- Vandaag -->
-          <div style="font-size:11px;font-weight:500;color:var(--text3);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;" id="voeding-dag-label">Vandaag</div>
-          <div id="voeding-list-today"></div>
-
-          <!-- Eerder -->
-          <div id="voeding-eerder-wrap" style="display:none;margin-top:12px;">
-            <div style="font-size:11px;font-weight:500;color:var(--text3);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;">Eerder</div>
-            <div id="voeding-list-eerder"></div>
-          </div>
-
-          <!-- Boodschappenlijst koppeling -->
-          <div id="bood-koppeling-wrap" style="margin-top:14px;display:none;">
-            <div style="font-size:11px;color:var(--text3);margin-bottom:6px;">Van je boodschappenlijst toevoegen:</div>
-            <div id="bood-koppeling-pills" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- SIDEBAR -->
-    <div style="display:flex;flex-direction:column;gap:16px;">
-
-      <!-- SCORE VANDAAG -->
-      <div class="card">
-        <div class="card-head"><div class="card-title">Gezondheidscore</div></div>
-        <div class="card-body">
-          <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px;">
-            <div class="avg-score-ring" id="avg-score-ring">
-              <div class="avg-score-val" id="avg-score-val">—</div>
-              <div class="avg-score-label">vandaag</div>
-            </div>
-            <div style="flex:1;">
-              <div style="font-size:12px;color:var(--text2);margin-bottom:6px;" id="score-omschrijving">Voeg iets toe om je score te zien</div>
-              <div class="score-bar-wrap"><div class="score-bar" id="avg-score-bar" style="width:0%"></div></div>
-              <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3);margin-top:3px;"><span>Ongezond</span><span>Gezond</span></div>
-            </div>
-          </div>
-          <div style="border-top:1px solid var(--border);padding-top:12px;">
-            <div style="font-size:11px;color:var(--text3);margin-bottom:8px;">Weekgemiddelde</div>
-            <div style="display:flex;align-items:center;gap:10px;">
-              <div style="font-family:'DM Serif Display',serif;font-size:22px;" id="week-avg-val">—</div>
-              <div style="flex:1;">
-                <div class="score-bar-wrap"><div class="score-bar" id="week-avg-bar" style="width:0%"></div></div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- VARIATIE -->
-      <div class="card">
-        <div class="card-head"><div class="card-title">Variatie deze week</div></div>
-        <div class="card-body" id="variatie-card">
-          <div class="empty">Voeg voeding toe om je variatie te zien</div>
-        </div>
-      </div>
-
-      <!-- PATROON -->
-      <div class="card">
-        <div class="card-head"><div class="card-title">Patroon</div></div>
-        <div class="card-body" id="patroon-card">
-          <div class="empty">Na een paar dagen zie je hier je eetpatroon</div>
-        </div>
-      </div>
-
-    </div>
-  </div>
-</div>
-
-<!-- RECEPTEN -->
-<div class="page" id="page-recepten">
-  <div class="card" style="padding:48px 32px;text-align:center;max-width:520px;margin:0 auto;">
-    <div style="font-size:40px;margin-bottom:16px;">🍳</div>
-    <h2 style="font-size:24px;margin-bottom:10px;">Maaltijdplanning & Recepten</h2>
-    <p style="color:var(--text2);font-size:14px;line-height:1.7;margin-bottom:20px;">Dit tabblad is gereserveerd voor de volgende fase van je rebuild. Hier komen straks eenvoudige, gezonde recepten met weinig ingrediënten — direct gekoppeld aan je boodschappenlijst.</p>
-    <div style="background:var(--accent-light);border-radius:var(--radius-sm);padding:16px;font-size:13px;color:var(--accent);margin-bottom:20px;">
-      Fase 2 — volgt binnenkort
-    </div>
-    <p style="font-size:13px;color:var(--text3);">Wil je alvast een recept idee? Vraag het aan Claude hieronder.</p>
-  </div>
-</div>
-
-</div>
-
-<!-- SETTINGS / DATA OVERLAY -->
-<div class="overlay" id="settings-overlay" onclick="if(event.target===this)closeSettings()">
-  <div class="modal" style="max-width:420px;">
-    <h2 style="margin-bottom:6px;">Data beheren</h2>
-    <p class="modal-sub">Exporteer je data als back-up, of importeer een eerdere back-up in een nieuwe versie van de app.</p>
-
-    <div style="background:var(--accent-light);border-radius:var(--radius-sm);padding:14px 16px;margin-bottom:16px;">
-      <div style="font-size:12px;font-weight:500;color:var(--accent);margin-bottom:4px;">Tip bij app-updates</div>
-      <div style="font-size:12px;color:var(--accent);line-height:1.6;">Exporteer altijd je data vóór je een nieuwe versie installeert. Importeer daarna in de nieuwe versie — zo verlies je nooit iets.</div>
-    </div>
-
-    <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px;">
-      <button class="btn btn-primary" onclick="exportData()" style="width:100%;padding:12px;font-size:14px;">
-        ↓ &nbsp;Exporteer mijn data (.json)
-      </button>
-      <div style="position:relative;">
-        <button class="btn btn-ghost" onclick="document.getElementById('import-file').click()" style="width:100%;padding:12px;font-size:14px;">
-          ↑ &nbsp;Importeer back-up bestand
-        </button>
-        <input type="file" id="import-file" accept=".json" onchange="importData(event)" style="display:none;" />
-      </div>
-    </div>
-
-    <div style="border-top:1px solid var(--border);padding-top:16px;">
-      <div style="font-size:12px;font-weight:500;color:var(--text2);margin-bottom:10px;">Statistieken</div>
-      <div id="settings-stats" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;"></div>
-    </div>
-
-
-    <div style="border-top:1px solid var(--border);padding-top:16px;margin-top:8px;">
-      <button class="btn btn-danger btn-sm" onclick="confirmReset()">Alle data wissen</button>
-    </div>
-
-    <button class="btn btn-ghost" style="width:100%;margin-top:16px;" onclick="closeSettings()">Sluiten</button>
-  </div>
-</div>
-
-
-<div class="overlay" id="mobile-overlay" onclick="if(event.target===this)closeMobile()">
-  <div class="modal">
-    <h2>Mijn boodschappen</h2>
-    <p class="modal-sub" id="mobile-date"></p>
-    <div id="mobile-list"></div>
-    <button class="btn btn-ghost" style="width:100%;margin-top:16px;" onclick="closeMobile()">Sluiten</button>
-  </div>
-</div>
-
-<div class="toast" id="toast"></div>
-
-<script>
-// ---- STATE ----
-const S = window.S = {
-  quotes: [
-    { text: "Begin waar je bent. Gebruik wat je hebt. Doe wat je kunt.", author: "Arthur Ashe" },
-    { text: "Elke dag is een nieuwe kans om opnieuw te beginnen.", author: "" },
-    { text: "Kleine stappen elke dag zijn beter dan grote sprongen af en toe.", author: "" },
-    { text: "De beste tijd om te beginnen was gisteren. De op een na beste tijd is nu.", author: "" },
-    { text: "Jij hebt overleefd wat je bijna had gebroken. Dat is kracht.", author: "" },
-    { text: "Structuur geeft vrijheid. Chaos put uit.", author: "" },
-    { text: "Verzorg je lichaam — het is de enige plek waar je moet leven.", author: "Jim Rohn" },
-    { text: "Vooruitgang, niet perfectie.", author: "" },
-    { text: "Jij bent niet wie je was. Je bent wie je kiest te zijn vandaag.", author: "" },
-    { text: "Na de storm komt de stilte. En daarna: de wederopbouw.", author: "" },
-    { text: "Jezelf kennen is het begin van alle wijsheid.", author: "Aristoteles" },
-    { text: "Elke ochtend word je herboren. Wat je vandaag doet, telt het meest.", author: "Boeddha" },
-  ],
-  qIdx: 0,
-  boodItems: [],
-  boodNextId: 1,
-  boodFreq: {},
-  boodWinkels: [],
-  boodView: 'cat',
-  boodFilter: 'alle',
-  budgetEntries: [],
-  agendaItems: [],
-  agNextId: 1,
-  agFilter: 'alle',
-  habits: [],
-  habitNextId: 1,
-  habitChecks: {},
-  notes: [],
-  reflections: [],
-  todoItems: [],
-  todoNextId: 1,
-  todoFilter: 'alle',
-  todoSort: 'prio',
-  voedingItems: [],
-  voedingNextId: 1,
-  voedingPortie: 'normaal',
-  voedingMoment: 'lunch',
-};
-
-// ---- PERSIST ----
-function save() {
-  const keys = ['boodItems','boodNextId','boodFreq','boodWinkels','budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId','voedingItems','voedingNextId'];
-  keys.forEach(k => localStorage.setItem('rml_' + k, JSON.stringify(S[k])));
-  localStorage.setItem('rml_qIdx', S.qIdx);
-}
-window.save = save;
-
-function load() {
-  const keys = ['boodItems','boodNextId','boodFreq','boodWinkels','budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId','voedingItems','voedingNextId'];
-  keys.forEach(k => { const v = localStorage.getItem('rml_' + k); if (v !== null) S[k] = JSON.parse(v); });
-  const q = localStorage.getItem('rml_qIdx'); if (q !== null) S.qIdx = parseInt(q);
-}
-window.load = load;
-
-// ---- EXPORT / IMPORT ----
-function exportData() {
-  const keys = ['boodItems','boodNextId','boodFreq','boodWinkels','budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','qIdx','todoItems','todoNextId','voedingItems','voedingNextId'];
-  const data = {};
-  keys.forEach(k => { data[k] = S[k]; });
-  data._exported = new Date().toISOString();
-  data._version = 1;
-
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  const dateStr = new Date().toISOString().slice(0,10);
-  a.href = url;
-  a.download = `rebuild-my-life-backup-${dateStr}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-  toast('Data geëxporteerd!');
+function renderBudget() {
+  const list = document.getElementById('budget-list');
+  if (!list) return;
+  if (!S.budgetEntries.length) { list.innerHTML = ''; document.getElementById('budget-total-row').style.display = 'none'; return; }
+  list.innerHTML = S.budgetEntries.slice().reverse().slice(0,8).map(e =>
+    `<div class="budget-entry">
+      <div><div class="budget-entry-left">${e.store}</div><div class="budget-entry-date">${fmtDateShort(e.date)}</div></div>
+      <div class="budget-entry-right">€ ${e.amount.toFixed(2)}</div>
+    </div>`).join('');
+  const total = S.budgetEntries.reduce((s,e)=>s+e.amount,0);
+  document.getElementById('budget-total-val').textContent = '€ ' + total.toFixed(2);
+  document.getElementById('budget-total-row').style.display = 'flex';
 }
 
-function importData(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = function(e) {
-    try {
-      const data = JSON.parse(e.target.result);
-      if (!data._version) throw new Error('Ongeldig bestand');
-      const keys = ['boodItems','boodNextId','boodFreq','boodWinkels','budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId','voedingItems','voedingNextId'];
-      keys.forEach(k => { if (data[k] !== undefined) S[k] = data[k]; });
-      if (data.qIdx !== undefined) S.qIdx = data.qIdx;
-      save();
-      renderAll();
-      renderSettingsStats();
-      toast('Data succesvol geïmporteerd!');
-    } catch(err) {
-      alert('Kon het bestand niet inlezen. Zorg dat je een geldig back-up bestand kiest.');
-    }
-  };
-  reader.readAsText(file);
-  event.target.value = '';
+// ---- AGENDA ----
+function addAgendaItem() {
+  const name = document.getElementById('ag-name').value.trim(); if (!name) return;
+  const type = document.getElementById('ag-type').value;
+  const date = document.getElementById('ag-date').value || today();
+  const time = document.getElementById('ag-time').value || '';
+  const note = document.getElementById('ag-note').value.trim();
+  S.agendaItems.push({ id: S.agNextId++, name, type, date, time, note });
+  S.agendaItems.sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
+  document.getElementById('ag-name').value = '';
+  document.getElementById('ag-note').value = '';
+  debouncedSave(); renderAll(); toast('Afspraak toegevoegd');
 }
 
-function openSettings() {
-  renderSettingsStats();
-  document.getElementById('settings-overlay').classList.add('open');
+function removeAgItem(id) {
+  S.agendaItems = S.agendaItems.filter(i=>i.id!==id);
+  debouncedSave(); renderAll();
 }
 
-function closeSettings() {
-  document.getElementById('settings-overlay').classList.remove('open');
+function setAgFilter(f) {
+  S.agFilter = f;
+  document.querySelectorAll('#page-agenda .filter-pill').forEach(p => {
+    const txt = p.textContent.toLowerCase();
+    p.classList.toggle('on', txt.includes(f==='alle'?'alle':f));
+  });
+  renderAgenda();
 }
 
-function renderSettingsStats() {
-  const el = document.getElementById('settings-stats');
+const TYPE_LABELS = { sporten:'Sporten', sociaal:'Sociaal', metime:'Me-time', werk:'Werk', Anders:'Anders' };
+
+function renderAgenda() {
+  const list = document.getElementById('agenda-list');
+  if (!list) return;
+  const items = S.agendaItems.filter(i => S.agFilter === 'alle' || i.type === S.agFilter);
+  if (!items.length) { list.innerHTML = '<div class="empty">Geen afspraken gevonden</div>'; return; }
+
+  const groups = {};
+  items.forEach(i => { if(!groups[i.date]) groups[i.date]=[]; groups[i.date].push(i); });
+
+  let html = '';
+  Object.keys(groups).sort().forEach(d => {
+    const isToday = d === today();
+    html += `<div class="agenda-day">
+      <div class="agenda-day-head">${fmtDate(d)}${isToday?' <span style="color:var(--accent);margin-left:6px;">Vandaag</span>':''}</div>`;
+    groups[d].forEach(item => {
+      const badgeClass = 'badge-' + (item.type === 'Anders' ? 'Anders' : item.type);
+      html += `<div class="agenda-event">
+        <span class="event-time">${item.time || '--:--'}</span>
+        <div style="flex:1;">
+          <div class="event-name">${item.name}</div>
+          ${item.note ? `<div class="event-note">${item.note}</div>` : ''}
+        </div>
+        <span class="badge badge-${item.type}">${TYPE_LABELS[item.type]||item.type}</span>
+        <button class="ibtn" onclick="removeAgItem(${item.id})">×</button>
+      </div>`;
+    });
+    html += '</div>';
+  });
+  list.innerHTML = html;
+
+  // Week summary
+  const weekEl = document.getElementById('week-summary');
+  if (weekEl) {
+    const weekDays = getWeekDays(today());
+    const counts = { sporten:0, sociaal:0, metime:0, werk:0, Anders:0 };
+    S.agendaItems.filter(i => weekDays.includes(i.date)).forEach(i => { counts[i.type] = (counts[i.type]||0)+1; });
+    const colors = { sporten:'var(--accent)', sociaal:'var(--blue)', metime:'var(--gold)', werk:'#4A3270', Anders:'var(--text2)' };
+    weekEl.innerHTML = Object.entries(counts).filter(([,v])=>v>0).map(([k,v])=>
+      `<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px;">
+        <span style="color:var(--text2);">${TYPE_LABELS[k]}</span>
+        <span style="font-weight:500;color:${colors[k]}">${v}×</span>
+      </div>`
+    ).join('') || '<p style="font-size:12px;color:var(--text3);">Nog niets gepland deze week</p>';
+  }
+
+  // Balans bars
+  const balEl = document.getElementById('balans-bars');
+  if (balEl) {
+    const all = S.agendaItems.length || 1;
+    const cnt = { sporten:0, sociaal:0, metime:0, werk:0 };
+    S.agendaItems.forEach(i => { if(cnt[i.type]!==undefined) cnt[i.type]++; });
+    const cols = { sporten:'var(--accent)', sociaal:'var(--blue)', metime:'var(--gold)', werk:'#4A3270' };
+    balEl.innerHTML = Object.entries(cnt).map(([k,v]) => {
+      const pct = Math.round(v/all*100);
+      return `<div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;">
+          <span style="color:var(--text2);">${TYPE_LABELS[k]}</span><span style="color:var(--text3);">${pct}%</span>
+        </div>
+        <div style="background:var(--surface2);border-radius:4px;height:6px;overflow:hidden;">
+          <div style="height:6px;border-radius:4px;background:${cols[k]};width:${pct}%;transition:width 0.4s;"></div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+}
+
+// ---- HABITS ----
+function addHabit() {
+  const name = document.getElementById('habit-name-input').value.trim(); if (!name) return;
+  const type = document.getElementById('habit-type').value;
+  S.habits.push({ id: S.habitNextId++, name, type });
+  document.getElementById('habit-name-input').value = '';
+  document.getElementById('add-habit-wrap').style.display = 'none';
+  debouncedSave(); renderHabits(); toast('Gewoonte toegevoegd: ' + name);
+}
+
+function removeHabit(id) {
+  S.habits = S.habits.filter(h=>h.id!==id);
+  debouncedSave(); renderHabits();
+}
+
+function toggleHabitDay(habitId, dateKey) {
+  const key = `${habitId}_${dateKey}`;
+  S.habitChecks[key] = !S.habitChecks[key];
+  debouncedSave(); renderHabits();
+}
+
+function renderHabits() {
+  const weekInput = document.getElementById('habit-week-input');
+  if (!weekInput) return;
+  const baseDate = weekInput.value || today();
+  const days = getWeekDays(baseDate);
+  const dayLabels = ['Ma','Di','Wo','Do','Vr','Za','Zo'];
+
+  function renderHabitGroup(containerId, habits) {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    if (!habits.length) { el.innerHTML = '<div class="empty" style="padding:12px;">Geen gewoonten in deze categorie</div>'; return; }
+    el.innerHTML = habits.map(h => {
+      const isGood = h.type === 'goed';
+      const dots = days.map((d,i) => {
+        const key = `${h.id}_${d}`;
+        const checked = S.habitChecks[key];
+        const isToday = d === today();
+        const dotClass = checked ? (isGood ? 'done' : 'bad-done') : '';
+        return `<div class="habit-dot ${dotClass}" onclick="toggleHabitDay(${h.id},'${d}')" title="${fmtDateShort(d)}" style="${isToday?'border-color:var(--accent);':''}">${checked?'✓':''}</div>`;
+      }).join('');
+      const doneCount = days.filter(d => S.habitChecks[`${h.id}_${d}`]).length;
+      const streak = isGood ? `${doneCount}/7` : `${7-doneCount}/7 vrij`;
+      return `<div class="habit-row">
+        <span class="habit-name">${h.name}</span>
+        <div class="habit-dots">${dots}</div>
+        <span class="habit-streak">${streak}</span>
+        <button class="ibtn" onclick="removeHabit(${h.id})">×</button>
+      </div>`;
+    }).join('');
+  }
+
+  renderHabitGroup('habits-good-list', S.habits.filter(h=>h.type==='goed'));
+  renderHabitGroup('habits-bad-list', S.habits.filter(h=>h.type==='slecht'));
+
+  // Progress card
+  const progEl = document.getElementById('habit-progress-card');
+  if (progEl && S.habits.length) {
+    const goodHabits = S.habits.filter(h=>h.type==='goed');
+    const totalChecks = goodHabits.reduce((s,h) => s + days.filter(d=>S.habitChecks[`${h.id}_${d}`]).length, 0);
+    const maxChecks = goodHabits.length * 7;
+    const pct = maxChecks ? Math.round(totalChecks/maxChecks*100) : 0;
+    progEl.innerHTML = `
+      <div class="stat-val" style="font-size:32px;margin-bottom:4px;">${pct}%</div>
+      <div style="font-size:12px;color:var(--text3);margin-bottom:10px;">Gezonde gewoonten score deze week</div>
+      <div class="prog-bar-wrap"><div class="prog-bar" style="width:${pct}%"></div></div>
+    `;
+  }
+
+  // Reflections
+  renderReflections();
+}
+
+// ---- NOTES ----
+function saveNote() {
+  const inp = document.getElementById('dash-note-input');
+  const text = inp.value.trim(); if (!text) return;
+  S.notes.unshift({ text, date: today(), ts: Date.now() });
+  inp.value = '';
+  debouncedSave(); renderNotes(); toast('Notitie opgeslagen');
+}
+
+function renderNotes() {
+  const el = document.getElementById('dash-notes-list');
   if (!el) return;
-  const stats = [
-    { label: 'Boodschappen', val: S.boodItems.filter(i=>!i.archived).length },
-    { label: 'Afspraken', val: S.agendaItems.length },
-    { label: 'Gewoonten', val: S.habits.length },
-    { label: 'Notities', val: S.notes.length + S.reflections.length },
-    { label: 'Budget entries', val: S.budgetEntries.length },
-    { label: 'Producten onthouden', val: Object.keys(S.boodFreq).length },
-  ];
-  el.innerHTML = stats.map(s =>
-    `<div style="background:var(--surface2);border-radius:var(--radius-sm);padding:10px 12px;">
-      <div style="font-size:11px;color:var(--text3);margin-bottom:3px;">${s.label}</div>
-      <div style="font-size:18px;font-weight:500;">${s.val}</div>
+  if (!S.notes.length) { el.innerHTML = ''; return; }
+  el.innerHTML = S.notes.slice(0,5).map(n =>
+    `<div class="note-card">
+      <div class="note-date">${fmtDateShort(n.date)}</div>
+      <div class="note-text">${n.text}</div>
     </div>`
   ).join('');
 }
 
-function confirmReset() {
-  if (confirm('Weet je zeker dat je ALLE data wilt wissen? Dit kan niet ongedaan worden gemaakt. Exporteer eerst een back-up!')) {
-    const keys = ['boodItems','boodNextId','boodFreq','budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId'];
-    keys.forEach(k => localStorage.removeItem('rml_' + k));
-    localStorage.removeItem('rml_qIdx');
-    S.boodItems=[]; S.boodNextId=1; S.boodFreq={}; S.boodWinkels=[]; S.budgetEntries=[];
-    S.agendaItems=[]; S.agNextId=1; S.habits=[]; S.habitNextId=1;
-    S.habitChecks={}; S.notes=[]; S.reflections=[];
-    S.todoItems=[]; S.todoNextId=1; S.qIdx=0;
-    renderAll();
-    renderSettingsStats();
-    toast('Alle data gewist');
+// ---- REFLECTIONS ----
+function saveReflection() {
+  const inp = document.getElementById('reflect-input');
+  const text = inp.value.trim(); if (!text) return;
+  S.reflections.unshift({ text, date: today() });
+  inp.value = '';
+  debouncedSave(); renderReflections(); toast('Reflectie opgeslagen');
+}
+
+function renderReflections() {
+  const el = document.getElementById('reflect-list');
+  if (!el) return;
+  el.innerHTML = S.reflections.slice(0,4).map(r =>
+    `<div class="note-card">
+      <div class="note-date">${fmtDateShort(r.date)}</div>
+      <div class="note-text">${r.text}</div>
+    </div>`
+  ).join('');
+}
+
+// ---- MOBILE LIST ----
+function openMobile() {
+  const overlay = document.getElementById('mobile-overlay');
+  const mlist = document.getElementById('mobile-list');
+  document.getElementById('mobile-date').textContent = fmtDate(today());
+  const unchecked = S.boodItems.filter(i=>!i.checked&&!i.archived);
+  if (!unchecked.length) {
+    mlist.innerHTML = '<div class="empty">Alle items zijn afgevinkt!</div>';
+  } else {
+    const byStore = {};
+    unchecked.forEach(i => { const s = cap(i.store); if(!byStore[s]) byStore[s]=[]; byStore[s].push(i); });
+    let html = '';
+    Object.keys(byStore).sort().forEach(s => {
+      html += `<div style="font-size:11px;font-weight:500;color:var(--text3);padding:8px 0 4px;text-transform:uppercase;letter-spacing:0.06em;">${s}</div>`;
+      byStore[s].forEach(i => html += `<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;border-radius:var(--radius-sm);background:var(--surface2);margin-bottom:5px;font-size:14px;">${i.name} ${getBadges(i.cat)}</div>`);
+    });
+    mlist.innerHTML = html;
+  }
+  overlay.classList.add('open');
+}
+function closeMobile() { document.getElementById('mobile-overlay').classList.remove('open'); }
+
+// ---- DASHBOARD ----
+function renderDashboard() {
+  // Stats
+  const todayItems = S.boodItems.filter(i=>!i.archived);
+  document.getElementById('ds-bood').textContent = todayItems.filter(i=>!i.checked).length;
+  const weekDays = getWeekDays(today());
+  document.getElementById('ds-agenda').textContent = S.agendaItems.filter(i=>weekDays.includes(i.date)).length;
+  const goodH = S.habits.filter(h=>h.type==='goed');
+  const todayChecks = goodH.filter(h=>S.habitChecks[`${h.id}_${today()}`]).length;
+  const hPct = goodH.length ? Math.round(todayChecks/goodH.length*100) : 0;
+  document.getElementById('ds-habits').textContent = hPct + '%';
+  const weekTotal = S.budgetEntries.filter(e=>weekDays.includes(e.date)).reduce((s,e)=>s+e.amount,0);
+  document.getElementById('ds-budget').textContent = '€' + Math.round(weekTotal);
+  const openTodos = S.todoItems.filter(i=>!i.done);
+  const dsTodo = document.getElementById('ds-todo');
+  if (dsTodo) dsTodo.textContent = openTodos.length;
+
+  // Agenda today
+  const agTodayEl = document.getElementById('dash-agenda-list');
+  const todayAg = S.agendaItems.filter(i=>i.date===today());
+  agTodayEl.innerHTML = todayAg.length ? todayAg.map(i=>
+    `<div class="agenda-event">
+      <span class="event-time">${i.time||'--:--'}</span>
+      <div style="flex:1;"><div class="event-name">${i.name}</div>${i.note?`<div class="event-note">${i.note}</div>`:''}</div>
+      <span class="badge badge-${i.type}">${TYPE_LABELS[i.type]||i.type}</span>
+    </div>`
+  ).join('') : '<div class="empty">Geen afspraken vandaag</div>';
+
+  // Boodschappen
+  const boodEl = document.getElementById('dash-bood-list');
+  const openItems = S.boodItems.filter(i=>!i.archived&&!i.checked).slice(0,5);
+  const totalItems = S.boodItems.filter(i=>!i.archived);
+  const doneItems = totalItems.filter(i=>i.checked);
+  boodEl.innerHTML = openItems.length ? openItems.map(i=>
+    `<div class="list-item" style="margin-bottom:4px;">
+      <input type="checkbox" class="item-check" onchange="toggleBood(${i.id})" />
+      <span class="item-name">${i.name}</span>
+      ${getBadges(i.cat)}
+    </div>`
+  ).join('') + (S.boodItems.filter(i=>!i.archived&&!i.checked).length > 5 ? `<div style="font-size:11px;color:var(--text3);padding:6px;">+${S.boodItems.filter(i=>!i.archived&&!i.checked).length-5} meer items...</div>` : '')
+  : '<div class="empty">Lijst is leeg of alles afgevinkt</div>';
+
+  const pw = document.getElementById('dash-prog-wrap');
+  const pb = document.getElementById('dash-prog-bar');
+  if (totalItems.length) {
+    pw.style.display = 'block';
+    pb.style.width = Math.round(doneItems.length/totalItems.length*100) + '%';
+  } else { pw.style.display = 'none'; }
+
+  // Habits today
+  const hEl = document.getElementById('dash-habits-list');
+  if (S.habits.length) {
+    hEl.innerHTML = S.habits.map(h => {
+      const checked = S.habitChecks[`${h.id}_${today()}`];
+      const isGood = h.type === 'goed';
+      return `<div class="habit-row" style="margin-bottom:5px;">
+        <span class="habit-name">${h.name}</span>
+        <div class="habit-dot ${checked?(isGood?'done':'bad-done'):''}" onclick="toggleHabitDay(${h.id},'${today()}')" style="flex-shrink:0;">${checked?'✓':''}</div>
+      </div>`;
+    }).join('');
+  } else {
+    hEl.innerHTML = '<div class="empty">Geen gewoonten ingesteld</div>';
+  }
+
+  // ToDo vandaag
+  const todoEl = document.getElementById('dash-todo-list');
+  if (todoEl) {
+    const PRIO_ORDER_D = { hoog:0, middel:1, laag:2, geen:3 };
+    const urgentFirst = S.todoItems.filter(i=>!i.done)
+      .sort((a,b) => (PRIO_ORDER_D[a.prio]??3)-(PRIO_ORDER_D[b.prio]??3) || (a.due||'9').localeCompare(b.due||'9'));
+    const overdueDash = urgentFirst.filter(i=>i.due&&i.due<today());
+    const todayDue = urgentFirst.filter(i=>i.due===today());
+    const rest = urgentFirst.filter(i=>!i.due||(i.due>today()));
+    const showItems = [...overdueDash, ...todayDue, ...rest].slice(0,6);
+    if (!showItems.length) {
+      todoEl.innerHTML = '<div class="empty">Geen open taken 🎉</div>';
+    } else {
+      todoEl.innerHTML = showItems.map(i => {
+        const isOverdue = i.due && i.due < today();
+        const isTodayDue = i.due === today();
+        const ACOLS = { Gezondheid:'var(--accent)', Persoonlijk:'var(--blue)', Financiën:'var(--gold)', Sociaal:'#7A3B8C', Praktisch:'var(--text2)', Werk:'#4A3270', Rebuild:'var(--red)' };
+        const col = ACOLS[i.area]||'var(--text2)';
+        const dueBadge = isOverdue ? `<span style="font-size:10px;color:var(--red);font-weight:500;">⚠ Te laat</span>`
+          : isTodayDue ? `<span style="font-size:10px;color:var(--gold);font-weight:500;">● Vandaag</span>` : '';
+        return `<div style="display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:var(--radius-sm);border:1px solid var(--border);margin-bottom:4px;${i.prio==='hoog'?'border-left:3px solid var(--red);':''}">
+          <div style="width:16px;height:16px;border-radius:50%;border:1.5px solid var(--border2);cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px;" onclick="toggleTodo(${i.id})"></div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${i.name}</div>
+            <div style="display:flex;gap:5px;margin-top:2px;align-items:center;">
+              <span style="font-size:10px;color:${col};font-weight:500;">${i.area}</span>
+              ${dueBadge}
+            </div>
+          </div>
+        </div>`;
+      }).join('');
+      const moreCount = urgentFirst.length - showItems.length;
+      if (moreCount > 0) todoEl.innerHTML += `<div style="font-size:11px;color:var(--text3);padding:5px 4px;cursor:pointer;" onclick="showPage('todo')">+${moreCount} meer taken →</div>`;
+    }
+  }
+}
+
+// ---- TODO ----
+const PRIO_ORDER = { hoog:0, middel:1, laag:2, geen:3 };
+const AREA_COLORS = { Gezondheid:'var(--accent)', Persoonlijk:'var(--blue)', Financiën:'var(--gold)', Sociaal:'#7A3B8C', Praktisch:'var(--text2)', Werk:'#4A3270', Rebuild:'var(--red)' };
+
+function toggleTodoForm() {
+  const w = document.getElementById('todo-form-wrap');
+  const isOpen = w.style.display !== 'none';
+  w.style.display = isOpen ? 'none' : 'block';
+  if (!isOpen) setTimeout(() => document.getElementById('todo-input').focus(), 50);
+}
+
+function addTodo() {
+  const name = document.getElementById('todo-input').value.trim();
+  if (!name) return;
+  const area = document.getElementById('todo-area').value;
+  const prio = document.getElementById('todo-prio').value;
+  const due = document.getElementById('todo-due').value;
+  const note = document.getElementById('todo-note-input').value.trim();
+  S.todoItems.push({ id: S.todoNextId++, name, area, prio, due, note, done: false, doneDate: null, created: today() });
+  document.getElementById('todo-input').value = '';
+  document.getElementById('todo-note-input').value = '';
+  document.getElementById('todo-due').value = '';
+  debouncedSave(); renderTodo(); toast('Taak toegevoegd ✓');
+}
+
+function toggleTodo(id) {
+  const t = S.todoItems.find(i => i.id === id);
+  if (!t) return;
+  t.done = !t.done;
+  t.doneDate = t.done ? today() : null;
+  debouncedSave(); renderTodo(); renderDashboard();
+  if (t.done) toast('Gedaan! 🎉');
+}
+
+function removeTodo(id) {
+  S.todoItems = S.todoItems.filter(i => i.id !== id);
+  debouncedSave(); renderTodo(); renderDashboard();
+}
+
+function clearDoneTodos() {
+  S.todoItems = S.todoItems.filter(i => !i.done);
+  debouncedSave(); renderTodo(); renderDashboard(); toast('Voltooide taken verwijderd');
+}
+
+function setTodoFilter(f) {
+  S.todoFilter = f;
+  document.querySelectorAll('.todo-area-pill').forEach(p => {
+    p.classList.toggle('on', p.textContent === (f === 'alle' ? 'Alle' : f));
+  });
+  renderTodo();
+}
+
+function setTodoSort(s) {
+  S.todoSort = s;
+  ['prio','due','area'].forEach(x => {
+    document.getElementById('sort-'+x+'-btn')?.classList.toggle('on', s === x);
+  });
+  renderTodo();
+}
+
+function getDueLabel(due) {
+  if (!due) return null;
+  const t = today();
+  if (due < t) return { label: 'Te laat: ' + fmtDateShort(due), cls: 'overdue' };
+  if (due === t) return { label: 'Vandaag', cls: 'vandaag' };
+  return { label: fmtDateShort(due), cls: '' };
+}
+
+function renderTodo() {
+  const listEl = document.getElementById('todo-list');
+  if (!listEl) return;
+
+  let items = S.todoItems.filter(i => S.todoFilter === 'alle' || i.area === S.todoFilter);
+
+  // Sort open first, then by chosen sort
+  const open = items.filter(i => !i.done);
+  const done = items.filter(i => i.done);
+
+  function sortItems(arr) {
+    if (S.todoSort === 'prio') return arr.sort((a,b) => (PRIO_ORDER[a.prio]??3)-(PRIO_ORDER[b.prio]??3) || (a.due||'9').localeCompare(b.due||'9'));
+    if (S.todoSort === 'due') return arr.sort((a,b) => (a.due||'9999').localeCompare(b.due||'9999'));
+    if (S.todoSort === 'area') return arr.sort((a,b) => a.area.localeCompare(b.area));
+    return arr;
+  }
+  sortItems(open); sortItems(done);
+
+  function renderItem(item) {
+    const dueInfo = getDueLabel(item.due);
+    const prioClass = item.prio !== 'geen' ? 'prio-'+item.prio : '';
+    const prioTag = item.prio !== 'geen' ? `<span class="prio-tag ${item.prio}">${cap(item.prio)}</span>` : '';
+    const areaColor = AREA_COLORS[item.area] || 'var(--text3)';
+    const areaTag = `<span style="font-size:11px;padding:2px 7px;border-radius:10px;background:var(--surface2);color:${areaColor};font-weight:500;">${item.area}</span>`;
+    const dueTag = dueInfo ? `<span class="todo-due ${dueInfo.cls}">📅 ${dueInfo.label}</span>` : '';
+    return `<div class="todo-item ${prioClass} ${item.done?'done':''}">
+      <div class="todo-circle ${item.done?'checked':''}" onclick="toggleTodo(${item.id})">${item.done?'✓':''}</div>
+      <div class="todo-body">
+        <div class="todo-title">${item.name}</div>
+        ${item.note ? `<div class="todo-note">${item.note}</div>` : ''}
+        <div class="todo-meta">${areaTag}${prioTag}${dueTag}</div>
+      </div>
+      <div class="todo-actions">
+        <button class="ibtn" onclick="removeTodo(${item.id})" title="Verwijder">×</button>
+      </div>
+    </div>`;
+  }
+
+  let html = '';
+  if (open.length) {
+    if (S.todoSort === 'area') {
+      const byArea = {};
+      open.forEach(i => { if(!byArea[i.area]) byArea[i.area]=[]; byArea[i.area].push(i); });
+      Object.keys(byArea).sort().forEach(a => {
+        html += `<div class="todo-sec">${a}</div>`;
+        byArea[a].forEach(i => html += renderItem(i));
+      });
+    } else {
+      open.forEach(i => html += renderItem(i));
+    }
+  }
+  if (done.length) {
+    html += `<div class="todo-sec">Voltooid (${done.length})</div>`;
+    done.slice(0,5).forEach(i => html += renderItem(i));
+    if (done.length > 5) html += `<div style="font-size:11px;color:var(--text3);padding:6px 0;">+${done.length-5} meer voltooide taken...</div>`;
+  }
+  if (!open.length && !done.length) html = '<div class="empty">Geen taken gevonden. Voeg er een toe!</div>';
+  listEl.innerHTML = html;
+
+  // Progress
+  const total = S.todoItems.length, doneCount = S.todoItems.filter(i=>i.done).length;
+  const pct = total ? Math.round(doneCount/total*100) : 0;
+  const progWrap = document.getElementById('todo-prog-wrap');
+  const progBar = document.getElementById('todo-prog-bar');
+  const progLabel = document.getElementById('todo-prog-label');
+  if (total) {
+    progWrap.style.display = 'block';
+    progBar.style.width = pct + '%';
+    progLabel.textContent = `${doneCount} van ${total} taken voltooid (${pct}%)`;
+  } else { progWrap.style.display = 'none'; progLabel.textContent = ''; }
+
+  // Sub label
+  const subEl = document.getElementById('todo-sub');
+  if (subEl) subEl.textContent = `${open.length} open ${open.length===1?'taak':'taken'}`;
+
+  // Stats panel
+  const openAll = S.todoItems.filter(i=>!i.done);
+  const doneAll = S.todoItems.filter(i=>i.done);
+  const todayTasks = openAll.filter(i=>i.due===today());
+  const overdue = openAll.filter(i=>i.due&&i.due<today());
+  const tsOpen = document.getElementById('ts-open'); if(tsOpen) tsOpen.textContent = openAll.length;
+  const tsDone = document.getElementById('ts-done'); if(tsDone) tsDone.textContent = doneAll.length;
+  const tsToday = document.getElementById('ts-today'); if(tsToday) tsToday.textContent = todayTasks.length;
+  const tsOv = document.getElementById('ts-overdue'); if(tsOv) tsOv.textContent = overdue.length;
+  const statsBar = document.getElementById('todo-stats-bar'); if(statsBar) statsBar.style.width = pct + '%';
+  const pctLabel = document.getElementById('todo-pct-label'); if(pctLabel) pctLabel.textContent = pct + '% voltooid';
+
+  // Area stats
+  const areaEl = document.getElementById('todo-area-stats');
+  if (areaEl) {
+    const areaCounts = {};
+    S.todoItems.forEach(i => { if(!areaCounts[i.area]) areaCounts[i.area]={open:0,done:0}; if(i.done) areaCounts[i.area].done++; else areaCounts[i.area].open++; });
+    areaEl.innerHTML = Object.keys(areaCounts).sort().map(a => {
+      const c = areaCounts[a]; const tot = c.open+c.done; const p2 = tot?Math.round(c.done/tot*100):0;
+      const col = AREA_COLORS[a]||'var(--text2)';
+      return `<div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px;">
+          <span style="color:${col};font-weight:500;">${a}</span>
+          <span style="color:var(--text3);">${c.done}/${tot}</span>
+        </div>
+        <div style="background:var(--surface2);border-radius:4px;height:5px;overflow:hidden;">
+          <div style="height:5px;border-radius:4px;background:${col};width:${p2}%;transition:width 0.4s;"></div>
+        </div>
+      </div>`;
+    }).join('') || '<div class="empty" style="padding:8px;">Nog geen taken</div>';
+  }
+
+  // Focus: next high-prio task
+  const nextEl = document.getElementById('todo-next-task');
+  const focusWrap = document.getElementById('todo-focus-wrap');
+  if (nextEl || focusWrap) {
+    const next = openAll.sort((a,b)=>(PRIO_ORDER[a.prio]??3)-(PRIO_ORDER[b.prio]??3)||(a.due||'9').localeCompare(b.due||'9'))[0];
+    if (next) {
+      const dueI = getDueLabel(next.due);
+      if (nextEl) nextEl.innerHTML = `<div style="display:flex;flex-direction:column;gap:10px;">
+        <div style="font-size:15px;font-weight:500;line-height:1.4;">${next.name}</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <span style="font-size:11px;padding:2px 7px;border-radius:10px;background:var(--surface2);color:${AREA_COLORS[next.area]||'var(--text2)'};font-weight:500;">${next.area}</span>
+          ${next.prio!=='geen'?`<span class="prio-tag ${next.prio}">${cap(next.prio)}</span>`:''}
+          ${dueI?`<span class="todo-due ${dueI.cls}">${dueI.label}</span>`:''}
+        </div>
+        ${next.note?`<div style="font-size:12px;color:var(--text3);font-style:italic;">${next.note}</div>`:''}
+        <button class="btn btn-accent btn-sm" onclick="toggleTodo(${next.id})">✓ Markeer als gedaan</button>
+      </div>`;
+      if (focusWrap && next.prio === 'hoog') {
+        focusWrap.innerHTML = `<div class="focus-banner" style="margin-bottom:16px;">
+          <div class="focus-banner-left">
+            <div class="focus-label">Focus — hoge prioriteit</div>
+            <div class="focus-title">${next.name}</div>
+            <div class="focus-area">${next.area}${dueI?' · '+dueI.label:''}</div>
+          </div>
+          <button class="focus-done-btn" onclick="toggleTodo(${next.id})">✓ Gedaan</button>
+        </div>`;
+      } else if (focusWrap) focusWrap.innerHTML = '';
+    } else {
+      if (nextEl) nextEl.innerHTML = '<div class="empty">Alle taken voltooid! 🎉</div>';
+      if (focusWrap) focusWrap.innerHTML = '';
+    }
   }
 }
 
 
-function today() { return new Date().toISOString().slice(0,10); }
-function fmtDate(d) {
-  if (!d) return '';
-  const dt = new Date(d + 'T00:00:00');
-  return dt.toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' });
-}
-function fmtDateShort(d) {
-  if (!d) return '';
-  const dt = new Date(d + 'T00:00:00');
-  return dt.toLocaleDateString('nl-NL', { weekday: 'short', day: 'numeric', month: 'short' });
-}
-function getWeekDays(fromDate) {
-  const d = new Date(fromDate + 'T00:00:00');
-  const day = d.getDay();
-  const diff = day === 0 ? -6 : 1 - day;
-  const mon = new Date(d); mon.setDate(d.getDate() + diff);
-  return Array.from({length:7}, (_,i) => { const x = new Date(mon); x.setDate(mon.getDate()+i); return x.toISOString().slice(0,10); });
-}
-function cap(s) { return s ? s[0].toUpperCase() + s.slice(1) : ''; }
-function toast(msg) {
-  const t = document.getElementById('toast');
-  t.textContent = msg; t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 2200);
+// ---- VOEDING ----
+const VOEDSEL_GROEPEN = [
+  { id: 'groenten', label: 'Groenten & Fruit', color: '#27AE60', emoji: '🥦' },
+  { id: 'granen', label: 'Granen & Koolhydraten', color: '#F39C12', emoji: '🍞' },
+  { id: 'eiwitten', label: 'Eiwitten', color: '#2980B9', emoji: '🥩' },
+  { id: 'zuivel', label: 'Zuivel', color: '#85C1E9', emoji: '🥛' },
+  { id: 'vetten', label: 'Vetten & Oliën', color: '#F7DC6F', emoji: '🫒' },
+  { id: 'snacks', label: 'Snacks & Zoetigheid', color: '#E74C3C', emoji: '🍫' },
+  { id: 'dranken', label: 'Dranken', color: '#A569BD', emoji: '🥤' },
+];
+
+function setPortie(p) {
+  S.voedingPortie = p;
+  document.querySelectorAll('.portie-btn').forEach(b => {
+    if (['klein','normaal','groot'].includes(b.textContent.toLowerCase())) {
+      b.classList.toggle('active', b.textContent.toLowerCase() === p);
+    }
+  });
 }
 
+function setMoment(m) {
+  S.voedingMoment = m;
+  document.querySelectorAll('.portie-btn').forEach(b => {
+    const momenten = ['ontbijt','lunch','diner','snack','onderweg'];
+    if (momenten.includes(b.textContent.toLowerCase())) {
+      b.classList.toggle('active', b.textContent.toLowerCase() === m);
+    }
+  });
+}
 
+async function addVoedingItem() {
+  const inp = document.getElementById('voeding-input');
+  const name = inp.value.trim();
+  if (!name) return;
 
+  const btn = document.getElementById('voeding-add-btn');
+  const loading = document.getElementById('voeding-ai-loading');
+  btn.disabled = true;
+  loading.style.display = 'flex';
 
+  const prompt = `Analyseer dit voedingsitem voor een gezondheids-app. Focus op het grote plaatje, geen grammen of calorieën.
 
+Item: "${name}"
+Portie: ${S.voedingPortie}
 
+Geef je antwoord in exact dit JSON formaat, niets anders:
+{"naam":"correcte naam","score":7,"groep":"groenten|granen|eiwitten|zuivel|vetten|snacks|dranken","omschrijving":"één zin max 8 woorden","tip":"één korte tip of lege string"}
+
+Score 1-10: 1=zeer ongezond, 10=zeer gezond. Cola=2, kipfilet=8, Big Mac=3, groenten=9.`;
+
+  try {
+    const response = await fetch('/.netlify/functions/ai-proxy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt })
+    });
+
+    const data = await response.json();
+    const raw = data.content?.[0]?.text || '';
+    const clean = raw.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(clean);
+
+    S.voedingItems.unshift({
+      id: S.voedingNextId++,
+      naam: parsed.naam || name,
+      score: parsed.score || 5,
+      groep: parsed.groep || 'snacks',
+      omschrijving: parsed.omschrijving || '',
+      tip: parsed.tip || '',
+      portie: S.voedingPortie,
+      moment: S.voedingMoment,
+      datum: today(),
+      ts: Date.now(),
+    });
+
+  } catch(e) {
+    // Fallback: lokale analyse
+    const result = analyseVoeding(name, S.voedingPortie);
+    S.voedingItems.unshift({
+      id: S.voedingNextId++,
+      naam: result.naam,
+      score: result.score,
+      groep: result.groep,
+      omschrijving: result.omschrijving,
+      tip: result.tip,
+      portie: S.voedingPortie,
+      moment: S.voedingMoment,
+      datum: today(),
+      ts: Date.now(),
+    });
+  }
+
+  inp.value = '';
+  btn.disabled = false;
+  loading.style.display = 'none';
+  debouncedSave();
+  renderVoeding();
+  toast('Toegevoegd!');
+}
+
+function analyseVoeding(name, portie) {
+  const n = name.toLowerCase();
+
+  // Database van producten en patronen
+  const regels = [
+    // Ongezond (1-3)
+    { match: ['cola','fanta','sprite','7up','energy drink','red bull','monster','frisdrank','soda'], score: 2, groep: 'dranken', omschrijving: 'Veel suiker, weinig voedingswaarde', tip: 'Kies water of thee als alternatief' },
+    { match: ['chips','crisps','popcorn zoet','snoep','candy','chocolade','mars','snickers','twix','oreo','koek','cake','taart','gebak'], score: 2, groep: 'snacks', omschrijving: 'Veel suiker en/of verzadigd vet', tip: 'Af en toe is prima, houd het bij kleine porties' },
+    { match: ['friet','frites','patat','fastfood','mcdonalds','mc donald','big mac','hamburger','cheeseburger','pizza','kfc','burger king','whopper'], score: 3, groep: 'snacks', omschrijving: 'Calorierijk fastfood', tip: 'Geniet ervan, maar compenseer met groenten later' },
+    { match: ['bier','wijn','alcohol','whisky','jenever','wodka','borrel','cocktail'], score: 2, groep: 'dranken', omschrijving: 'Alcoholische drank', tip: 'Minder is beter voor herstel en slaap' },
+    // Matig (4-6)
+    { match: ['brood','boterham','sandwich','toast','crackers','beschuit','rijst','pasta','noodles','spaghetti'], score: 5, groep: 'granen', omschrijving: 'Koolhydraatbron', tip: 'Kies volkoren varianten voor meer vezels' },
+    { match: ['kaas','gouda','cheddar','brie','camembert'], score: 5, groep: 'zuivel', omschrijving: 'Eiwitten en vet', tip: 'Met mate een goede aanvulling' },
+    { match: ['aardappel','frites thuis','puree'], score: 5, groep: 'granen', omschrijving: 'Goede koolhydraatbron', tip: 'Gekookt beter dan gebakken' },
+    { match: ['soep','cup a soup','tomatensoep'], score: 5, groep: 'groenten', omschrijving: 'Afhankelijk van soort', tip: 'Zelfgemaakt heeft meer voedingswaarde' },
+    { match: ['melk','yoghurt','kwark','skyr'], score: 6, groep: 'zuivel', omschrijving: 'Goede bron van eiwitten en calcium', tip: '' },
+    // Gezond (7-9)
+    { match: ['kip','kipfilet','kippenborst','kalkoen','vis','zalm','tonijn','makreel','haring','garnalen'], score: 8, groep: 'eiwitten', omschrijving: 'Uitstekende eiwitbron', tip: '' },
+    { match: ['ei','eieren','omelet','roerei','scrambled'], score: 8, groep: 'eiwitten', omschrijving: 'Voedzame eiwitbron', tip: '' },
+    { match: ['rundvlees','biefstuk','gehakt','varkensvlees'], score: 6, groep: 'eiwitten', omschrijving: 'Goede eiwitbron, let op vet', tip: 'Kies mager vlees waar mogelijk' },
+    { match: ['salade','sla','spinazie','broccoli','courgette','tomaat','komkommer','paprika','wortel','bloemkool','spruitjes','andijvie','groente'], score: 9, groep: 'groenten', omschrijving: 'Uitstekend — vol vitamines', tip: '' },
+    { match: ['appel','peer','banaan','sinaasappel','druiven','aardbei','mango','ananas','fruit','bessen','blauwe bes'], score: 8, groep: 'groenten', omschrijving: 'Natuurlijk en voedzaam', tip: '' },
+    { match: ['noten','amandelen','walnoten','cashew','pinda','hazelnoten'], score: 7, groep: 'vetten', omschrijving: 'Gezonde vetten en eiwitten', tip: 'Let op de portiegrootte' },
+    { match: ['avocado','olijfolie','lijnzaad'], score: 8, groep: 'vetten', omschrijving: 'Gezonde onverzadigde vetten', tip: '' },
+    { match: ['water','spa','bronwater','mineraalwater'], score: 10, groep: 'dranken', omschrijving: 'Perfecte hydratatie', tip: '' },
+    { match: ['thee','groene thee','kruidenthee'], score: 9, groep: 'dranken', omschrijving: 'Gezonde drank vol antioxidanten', tip: '' },
+    { match: ['koffie'], score: 6, groep: 'dranken', omschrijving: 'Met mate prima', tip: 'Zonder suiker het gezondst' },
+    { match: ['smoothie','shake'], score: 7, groep: 'dranken', omschrijving: 'Afhankelijk van ingrediënten', tip: 'Let op toegevoegde suikers' },
+    { match: ['peulvruchten','linzen','kikkererwten','bonen','hummus'], score: 8, groep: 'eiwitten', omschrijving: 'Plantaardige eiwitten en vezels', tip: '' },
+    { match: ['havermout','muesli','granola'], score: 7, groep: 'granen', omschrijving: 'Volkoren en voedzaam', tip: 'Zonder toegevoegde suiker ideaal' },
+    { match: ['proteïne','protein shake','whey'], score: 8, groep: 'eiwitten', omschrijving: 'Gerichte eiwitaanvulling', tip: 'Goed na het sporten' },
+  ];
+
+  // Zoek beste match
+  let beste = null;
+  let besteScore = 0;
+  for (const regel of regels) {
+    for (const keyword of regel.match) {
+      if (n.includes(keyword)) {
+        const score = keyword.length; // langere match = specifieker
+        if (score > besteScore) {
+          besteScore = score;
+          beste = regel;
+        }
+      }
+    }
+  }
+
+  // Portie correctie
+  let scoreCorrectie = 0;
+  if (portie === 'groot') scoreCorrectie = beste ? (beste.score >= 7 ? 0 : -1) : 0;
+  if (portie === 'klein') scoreCorrectie = beste ? (beste.score <= 4 ? 1 : 0) : 0;
+
+  if (beste) {
+    return {
+      naam: name,
+      score: Math.min(10, Math.max(1, beste.score + scoreCorrectie)),
+      groep: beste.groep,
+      omschrijving: beste.omschrijving,
+      tip: beste.tip,
+    };
+  }
+
+  // Geen match — neutrale score
+  return {
+    naam: name,
+    score: 5,
+    groep: 'snacks',
+    omschrijving: 'Onbekend product',
+    tip: 'Voeg meer details toe voor een betere analyse',
+  };
+}
+
+function removeVoedingItem(id) {
+  S.voedingItems = S.voedingItems.filter(i => i.id !== id);
+  debouncedSave();
+  renderVoeding();
+}
+
+function getScoreColor(score) {
+  const colors = ['','#C0392B','#E74C3C','#E67E22','#F39C12','#F1C40F','#D4AC0D','#82B340','#27AE60','#1E8449','#145A32'];
+  return colors[Math.min(10, Math.max(1, Math.round(score)))] || '#ccc';
+}
+
+function getScoreLabel(score) {
+  if (score <= 2) return 'Ongezond';
+  if (score <= 4) return 'Matig';
+  if (score <= 6) return 'Redelijk';
+  if (score <= 8) return 'Goed';
+  return 'Uitstekend';
+}
+
+function renderVoeding() {
+  // Boodschappenlijst koppeling
+  const koppeling = document.getElementById('bood-koppeling-wrap');
+  const pills = document.getElementById('bood-koppeling-pills');
+  const boodOpen = S.boodItems.filter(i => !i.checked && !i.archived);
+  if (koppeling && pills && boodOpen.length) {
+    koppeling.style.display = 'block';
+    pills.innerHTML = boodOpen.slice(0,8).map(i =>
+      `<span class="sugg-pill" onclick="quickAddVoeding('${i.name.replace(/'/g,"\\'")}')">+ ${i.name}</span>`
+    ).join('');
+  } else if (koppeling) koppeling.style.display = 'none';
+
+  // Items vandaag en eerder
+  const todayItems = S.voedingItems.filter(i => i.datum === today());
+  const eerderItems = S.voedingItems.filter(i => i.datum !== today()).slice(0, 10);
+
+  const renderItem = (item) => {
+    const col = getScoreColor(item.score);
+    const scoreClass = `score-${Math.round(item.score)}`;
+    return `<div class="voeding-item">
+      <div class="voeding-score-badge" style="background:${col};">${item.score}</div>
+      <div class="voeding-item-left">
+        <div class="voeding-item-name">${item.naam}</div>
+        <div class="voeding-item-meta">${item.moment} · ${item.portie}${item.omschrijving ? ' · ' + item.omschrijving : ''}</div>
+        ${item.tip ? `<div style="font-size:11px;color:var(--accent);margin-top:2px;">💡 ${item.tip}</div>` : ''}
+      </div>
+      <button class="ibtn" onclick="removeVoedingItem(${item.id})">×</button>
+    </div>`;
+  };
+
+  const listToday = document.getElementById('voeding-list-today');
+  if (listToday) {
+    listToday.innerHTML = todayItems.length
+      ? todayItems.map(renderItem).join('')
+      : '<div class="empty">Nog niets toegevoegd vandaag</div>';
+  }
+
+  const eerderWrap = document.getElementById('voeding-eerder-wrap');
+  const listEerder = document.getElementById('voeding-list-eerder');
+  if (eerderWrap && listEerder) {
+    if (eerderItems.length) {
+      eerderWrap.style.display = 'block';
+      listEerder.innerHTML = eerderItems.map(renderItem).join('');
+    } else eerderWrap.style.display = 'none';
+  }
+
+  // Score vandaag
+  const avgEl = document.getElementById('avg-score-val');
+  const avgBar = document.getElementById('avg-score-bar');
+  const avgOmschrijving = document.getElementById('score-omschrijving');
+  const avgRing = document.getElementById('avg-score-ring');
+
+  if (todayItems.length) {
+    const avg = todayItems.reduce((s, i) => s + i.score, 0) / todayItems.length;
+    const rounded = Math.round(avg * 10) / 10;
+    const col = getScoreColor(Math.round(avg));
+    if (avgEl) avgEl.textContent = rounded.toFixed(1);
+    if (avgBar) { avgBar.style.width = (avg / 10 * 100) + '%'; avgBar.className = `score-bar score-${Math.round(avg)}`; }
+    if (avgOmschrijving) avgOmschrijving.textContent = getScoreLabel(avg) + ' patroon vandaag';
+    if (avgRing) avgRing.style.borderColor = col;
+  } else {
+    if (avgEl) avgEl.textContent = '—';
+    if (avgBar) avgBar.style.width = '0%';
+    if (avgOmschrijving) avgOmschrijving.textContent = 'Voeg iets toe om je score te zien';
+    if (avgRing) avgRing.style.borderColor = 'var(--border2)';
+  }
+
+  // Weekgemiddelde
+  const weekDays = getWeekDays(today());
+  const weekItems = S.voedingItems.filter(i => weekDays.includes(i.datum));
+  const weekAvgEl = document.getElementById('week-avg-val');
+  const weekAvgBar = document.getElementById('week-avg-bar');
+  if (weekItems.length) {
+    const weekAvg = weekItems.reduce((s, i) => s + i.score, 0) / weekItems.length;
+    if (weekAvgEl) weekAvgEl.textContent = (Math.round(weekAvg * 10) / 10).toFixed(1);
+    if (weekAvgBar) { weekAvgBar.style.width = (weekAvg / 10 * 100) + '%'; weekAvgBar.className = `score-bar score-${Math.round(weekAvg)}`; }
+  } else {
+    if (weekAvgEl) weekAvgEl.textContent = '—';
+    if (weekAvgBar) weekAvgBar.style.width = '0%';
+  }
+
+  // Variatie
+  const variatieEl = document.getElementById('variatie-card');
+  if (variatieEl && weekItems.length) {
+    const groepen = new Set(weekItems.map(i => i.groep));
+    const variatieScore = Math.round((groepen.size / VOEDSEL_GROEPEN.length) * 10);
+    variatieEl.innerHTML = `
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+        <div class="avg-score-ring" style="border-color:${getScoreColor(variatieScore)};">
+          <div class="avg-score-val">${variatieScore}</div>
+          <div class="avg-score-label">variatie</div>
+        </div>
+        <div style="flex:1;">
+          <div style="font-size:12px;color:var(--text2);margin-bottom:6px;">${groepen.size} van ${VOEDSEL_GROEPEN.length} groepen deze week</div>
+          <div class="score-bar-wrap"><div class="score-bar score-${variatieScore}" style="width:${variatieScore*10}%"></div></div>
+          <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3);margin-top:3px;"><span>Eenzijdig</span><span>Gevarieerd</span></div>
+        </div>
+      </div>
+      ${VOEDSEL_GROEPEN.map(g => `
+        <div class="groep-row">
+          <div class="groep-dot" style="background:${groepen.has(g.id) ? g.color : 'var(--border2)'};"></div>
+          <span style="flex:1;font-size:12px;color:${groepen.has(g.id) ? 'var(--text)' : 'var(--text3)'};">${g.emoji} ${g.label}</span>
+          ${groepen.has(g.id) ? '<span style="font-size:11px;color:var(--accent);">✓</span>' : ''}
+        </div>`).join('')}
+    `;
+  } else if (variatieEl) {
+    variatieEl.innerHTML = '<div class="empty">Voeg voeding toe om je variatie te zien</div>';
+  }
+
+  // Patroon
+  const patroonEl = document.getElementById('patroon-card');
+  if (patroonEl && S.voedingItems.length >= 3) {
+    const dagenMetData = [...new Set(S.voedingItems.map(i => i.datum))].sort().reverse().slice(0, 7);
+    patroonEl.innerHTML = dagenMetData.map(d => {
+      const dagItems = S.voedingItems.filter(i => i.datum === d);
+      const dagAvg = dagItems.reduce((s, i) => s + i.score, 0) / dagItems.length;
+      const col = getScoreColor(Math.round(dagAvg));
+      const isToday = d === today();
+      return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+        <div style="font-size:11px;color:var(--text3);width:70px;flex-shrink:0;">${isToday ? 'Vandaag' : fmtDateShort(d)}</div>
+        <div style="flex:1;background:var(--surface2);border-radius:4px;height:8px;overflow:hidden;">
+          <div style="height:8px;border-radius:4px;background:${col};width:${dagAvg/10*100}%;transition:width 0.4s;"></div>
+        </div>
+        <div style="font-size:12px;font-weight:500;width:24px;text-align:right;color:${col};">${dagAvg.toFixed(1)}</div>
+      </div>`;
+    }).join('');
+  } else if (patroonEl) {
+    patroonEl.innerHTML = '<div class="empty">Na een paar dagen zie je hier je eetpatroon</div>';
+  }
+}
+
+function quickAddVoeding(name) {
+  document.getElementById('voeding-input').value = name;
+  addVoedingItem();
+}
+
+function renderAll() {
+  renderQuote();
+  renderBoodList();
+  renderBudget();
+  renderAgenda();
+  renderHabits();
+  renderNotes();
+  renderTodo();
+  renderVoeding();
+  renderDashboard();
+}
+window._renderAll = renderAll;
+
+function initApp() {
+  const now = new Date();
+  document.getElementById('nav-date').textContent = now.toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' });
+  document.getElementById('ag-date').value = today();
+  document.getElementById('habit-week-input').value = today();
+  renderAll();
+}
+window.initApp = initApp;
+
+// Legacy init for localStorage fallback
+function init() {
+  load();
+  const now = new Date();
+  const navDate = document.getElementById('nav-date');
+  if (navDate) navDate.textContent = now.toLocaleDateString('nl-NL', { weekday: 'long', day: 'numeric', month: 'long' });
+  const agDate = document.getElementById('ag-date');
+  if (agDate) agDate.value = today();
+  const habitWeek = document.getElementById('habit-week-input');
+  if (habitWeek) habitWeek.value = today();
+  S.qIdx = Math.floor(Math.random() * S.quotes.length);
+}
+</script>
+</div><!-- end app-content -->
+</body>
+</html>
