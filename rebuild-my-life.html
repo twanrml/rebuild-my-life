@@ -578,6 +578,17 @@ window.saveToFirestore = async function() {
     keys.forEach(k => { data[k] = window.S[k]; });
     const docRef = doc(db, 'users', currentUser.uid, 'data', 'appdata');
     await setDoc(docRef, data, { merge: true });
+
+    // Sync boodschappendata ook naar shared/boodschappen zodat gast-modus het kan lezen
+    const sharedRef = doc(db, 'shared', 'boodschappen');
+    await setDoc(sharedRef, {
+      boodItems: window.S.boodItems,
+      boodWinkels: window.S.boodWinkels,
+      boodFreq: window.S.boodFreq,
+      boodNextId: window.S.boodNextId,
+      updatedAt: new Date().toISOString()
+    });
+
     setSyncStatus('synced');
     // Also save to localStorage as backup
     if (window.save) window.save();
@@ -1570,25 +1581,21 @@ async function checkPin() {
     const pinSnap = await getDoc(pinRef);
 
     if (pinSnap.exists() && pinSnap.data().pin === pin) {
-      // Laad boodschappen data van de eigenaar
-      const ownerRef = doc(db, 'shared', 'pincode');
-      const ownerData = pinSnap.data();
-      const ownerId = ownerData.ownerId;
+      const ownerId = pinSnap.data().ownerId;
 
-      if (ownerId) {
-        const dataRef = doc(db, 'users', ownerId, 'data', 'appdata');
-        const dataSnap = await getDoc(dataRef);
-        if (dataSnap.exists()) {
-          const data = dataSnap.data();
-          if (data.boodItems) window.S.boodItems = data.boodItems;
-          if (data.boodWinkels) window.S.boodWinkels = data.boodWinkels;
-          if (data.boodFreq) window.S.boodFreq = data.boodFreq;
-          if (data.boodNextId) window.S.boodNextId = data.boodNextId;
-        }
-        // Sla ownerId op voor schrijven
-        window._gastOwnerId = ownerId;
-        window._gastDb = db;
+      // Laad boodschappendata uit shared/boodschappen (publiek leesbaar, geen auth nodig)
+      const boodRef = doc(db, 'shared', 'boodschappen');
+      const boodSnap = await getDoc(boodRef);
+      if (boodSnap.exists()) {
+        const data = boodSnap.data();
+        if (data.boodItems) window.S.boodItems = data.boodItems;
+        if (data.boodWinkels) window.S.boodWinkels = data.boodWinkels;
+        if (data.boodFreq) window.S.boodFreq = data.boodFreq;
+        if (data.boodNextId) window.S.boodNextId = data.boodNextId;
       }
+
+      window._gastOwnerId = ownerId;
+      window._gastDb = db;
 
       gastMode = true;
       document.getElementById('auth-screen').style.display = 'none';
@@ -1623,10 +1630,11 @@ function uitloggenGast() {
 
 let gastUnsubscribe = null;
 async function startGastSync(ownerId, db) {
-  if (!ownerId || !db) return;
+  if (!db) return;
   if (gastUnsubscribe) gastUnsubscribe();
   const { onSnapshot, doc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
-  const dataRef = doc(db, 'users', ownerId, 'data', 'appdata');
+  // Luister naar shared/boodschappen voor real-time updates van Twan
+  const dataRef = doc(db, 'shared', 'boodschappen');
   gastUnsubscribe = onSnapshot(dataRef, (snap) => {
     if (snap.exists() && !snap.metadata.hasPendingWrites && !snap.metadata.fromCache) {
       const data = snap.data();
@@ -1640,12 +1648,12 @@ async function startGastSync(ownerId, db) {
 }
 
 async function gastSaveToFirestore() {
-  const ownerId = window._gastOwnerId;
   const db = window._gastDb;
-  if (!ownerId || !db) return;
+  if (!db) return;
   try {
     const { doc, setDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
-    const dataRef = doc(db, 'users', ownerId, 'data', 'appdata');
+    // Gast schrijft naar shared/boodschappen — publiek schrijfbaar via rules
+    const dataRef = doc(db, 'shared', 'boodschappen');
     await setDoc(dataRef, {
       boodItems: window.S.boodItems,
       boodWinkels: window.S.boodWinkels,
