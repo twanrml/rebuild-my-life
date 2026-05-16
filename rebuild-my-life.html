@@ -2138,7 +2138,10 @@ function renderBoodList() {
       html += `<div class="list-item${item.checked?' done':''}">
         <input type="checkbox" class="item-check" ${item.checked?'checked':''} onchange="toggleBood(${item.id})" />
         <span class="item-name">${item.name}</span>
-        <button class="ibtn" onclick="removeBood(${item.id})" title="Verwijder">×</button>
+        <div class="item-meta">
+          ${item.store ? `<span class="item-store">${item.store}</span>` : ''}
+          <button class="ibtn" onclick="removeBood(${item.id})" title="Verwijder">×</button>
+        </div>
       </div>`;
     });
   });
@@ -2149,7 +2152,9 @@ function renderBoodList() {
       html += `<div class="list-item${item.checked?' done':''}">
         <input type="checkbox" class="item-check" ${item.checked?'checked':''} onchange="toggleBood(${item.id})" />
         <span class="item-name">${item.name}</span>
-        <button class="ibtn" onclick="removeBood(${item.id})" title="Verwijder">×</button>
+        <div class="item-meta">
+          <button class="ibtn" onclick="removeBood(${item.id})" title="Verwijder">×</button>
+        </div>
       </div>`;
     });
   }
