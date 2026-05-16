@@ -552,19 +552,29 @@ onAuthStateChanged(auth, async (user) => {
 async function loadFromFirestore(uid) {
   setSyncStatus('syncing');
   try {
+    // Laad persoonlijke data (alles behalve boodschappen)
     const docRef = doc(db, 'users', uid, 'data', 'appdata');
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
       const data = docSnap.data();
-      const keys = ['boodItems','boodNextId','boodFreq','boodWinkels','budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId','voedingItems','voedingNextId'];
+      const keys = ['budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId','voedingItems','voedingNextId'];
       keys.forEach(k => { if (data[k] !== undefined) window.S[k] = data[k]; });
       if (data.qIdx !== undefined) window.S.qIdx = data.qIdx;
+    }
+    // Laad boodschappendata uit shared document (gedeeld met gast)
+    const sharedRef = doc(db, 'shared', 'boodschappen');
+    const sharedSnap = await getDoc(sharedRef);
+    if (sharedSnap.exists()) {
+      const sd = sharedSnap.data();
+      if (sd.boodItems !== undefined) window.S.boodItems = sd.boodItems;
+      if (sd.boodWinkels !== undefined) window.S.boodWinkels = sd.boodWinkels;
+      if (sd.boodFreq !== undefined) window.S.boodFreq = sd.boodFreq;
+      if (sd.boodNextId !== undefined) window.S.boodNextId = sd.boodNextId;
     }
     setSyncStatus('synced');
   } catch(e) {
     console.error('Load error:', e);
     setSyncStatus('error');
-    // Fall back to localStorage
     if (window.load) window.load();
   }
 }
@@ -573,13 +583,14 @@ window.saveToFirestore = async function() {
   if (!currentUser) return;
   setSyncStatus('syncing');
   try {
-    const keys = ['boodItems','boodNextId','boodFreq','boodWinkels','budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId','qIdx','voedingItems','voedingNextId'];
+    // Sla persoonlijke data op in users document (zonder boodschappen)
+    const keys = ['budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId','qIdx','voedingItems','voedingNextId'];
     const data = { updatedAt: new Date().toISOString() };
     keys.forEach(k => { data[k] = window.S[k]; });
     const docRef = doc(db, 'users', currentUser.uid, 'data', 'appdata');
     await setDoc(docRef, data, { merge: true });
 
-    // Sync boodschappendata ook naar shared/boodschappen zodat gast-modus het kan lezen
+    // Sla boodschappendata op in shared document (gedeeld met gast)
     const sharedRef = doc(db, 'shared', 'boodschappen');
     await setDoc(sharedRef, {
       boodItems: window.S.boodItems,
@@ -590,7 +601,6 @@ window.saveToFirestore = async function() {
     });
 
     setSyncStatus('synced');
-    // Also save to localStorage as backup
     if (window.save) window.save();
   } catch(e) {
     console.error('Save error:', e);
@@ -599,19 +609,16 @@ window.saveToFirestore = async function() {
   }
 };
 
+let unsubscribeSharedSnapshot = null;
+
 function startRealtimeSync(uid) {
   if (unsubscribeSnapshot) unsubscribeSnapshot();
   const docRef = doc(db, 'users', uid, 'data', 'appdata');
-  let lastSyncTs = 0;
   unsubscribeSnapshot = onSnapshot(docRef, { includeMetadataChanges: false }, (docSnap) => {
-    // Alleen verwerken als het van de server komt (niet onze eigen pending write)
     if (docSnap.exists() && !docSnap.metadata.hasPendingWrites && !docSnap.metadata.fromCache) {
       const data = docSnap.data();
-      const serverTs = data.updatedAt || '';
-      // Sla over als we zelf recent geschreven hebben (binnen 3 seconden)
       const now = Date.now();
       if (now - lastLocalWrite < 3000) return;
-      lastSyncTs = now;
       const keys = ['boodItems','boodNextId','boodFreq','boodWinkels','budgetEntries','agendaItems','agNextId','habits','habitNextId','habitChecks','notes','reflections','todoItems','todoNextId','voedingItems','voedingNextId'];
       keys.forEach(k => { if (data[k] !== undefined) window.S[k] = data[k]; });
       if (window._renderAll) window._renderAll();
@@ -620,6 +627,25 @@ function startRealtimeSync(uid) {
   }, (error) => {
     console.error('Snapshot error:', error);
     setSyncStatus('error');
+  });
+
+  // Luister naar shared/boodschappen — wijzigingen van Abigail komen hier real-time binnen
+  if (unsubscribeSharedSnapshot) unsubscribeSharedSnapshot();
+  const sharedRef = doc(db, 'shared', 'boodschappen');
+  unsubscribeSharedSnapshot = onSnapshot(sharedRef, { includeMetadataChanges: false }, (snap) => {
+    if (snap.exists() && !snap.metadata.hasPendingWrites && !snap.metadata.fromCache) {
+      const data = snap.data();
+      const now = Date.now();
+      if (now - lastLocalWrite < 3000) return;
+      if (data.boodItems !== undefined) window.S.boodItems = data.boodItems;
+      if (data.boodWinkels !== undefined) window.S.boodWinkels = data.boodWinkels;
+      if (data.boodFreq !== undefined) window.S.boodFreq = data.boodFreq;
+      if (data.boodNextId !== undefined) window.S.boodNextId = data.boodNextId;
+      if (window._renderAll) window._renderAll();
+      setSyncStatus('synced');
+    }
+  }, (error) => {
+    console.warn('Shared snapshot error:', error);
   });
 }
 
